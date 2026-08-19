@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,6 +22,31 @@ export const ensureDirs = () => {
   for (const dir of [dataDir, fixturesDir, stateDir, runsDir]) {
     mkdirSync(dir, { recursive: true })
   }
+}
+
+// Rewrites (or inserts) the `workspace:` line in the config after an in-app
+// workspace join, preserving comments and user entries. Also mirrors the change
+// into the .app's config when this process is running from the repo, so both
+// stay in step.
+export const updateConfigWorkspace = (configPath, workspaceId, workspaceName) => {
+  const file = resolveConfigPath(configPath)
+  if (!existsSync(file)) return null
+  const text = readFileSync(file, 'utf8')
+  const lines = text.split('\n')
+  const nameLine = workspaceName ? `workspaceName: ${JSON.stringify(workspaceName)}` : null
+
+  const withoutOld = lines.filter((line) => !/^workspaceName:\s/u.test(line))
+  const idIndex = withoutOld.findIndex((line) => /^workspace:\s/u.test(line))
+  const insert = [`workspace: ${workspaceId}`, ...(nameLine ? [nameLine] : [])]
+  if (idIndex >= 0) {
+    withoutOld.splice(idIndex, 1, ...insert)
+  } else {
+    const baseIndex = withoutOld.findIndex((line) => /^baseUrl:\s/u.test(line))
+    withoutOld.splice(baseIndex >= 0 ? baseIndex + 1 : 0, 0, ...insert)
+  }
+  const next = withoutOld.join('\n')
+  writeFileSync(file, next)
+  return file
 }
 
 const slugify = (label) => {
@@ -81,6 +106,7 @@ export const loadConfig = (configPath) => {
     file,
     baseUrl,
     workspace: raw.workspace ? String(raw.workspace).trim() : null,
+    workspaceName: raw.workspaceName ? String(raw.workspaceName).trim() : null,
     users,
   }
 }

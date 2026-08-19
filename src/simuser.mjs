@@ -238,6 +238,9 @@ export class SimUser {
     const body = await response.json().catch(() => null)
     const callId = findStringField(body, 'id')
     if (!callId) await this.#fail('create', 'create response contained no meeting id')
+    // CreateMeeting returns the guest invite link inline — capture it so guests
+    // can join without touching the host's Add-to-call modal.
+    this.guestToken = findStringField(body?.guest_link ?? body?.guestLink ?? null, 'token')
 
     await this.page.locator(SEL.leaveButton).waitFor({ state: 'visible', timeout: JOIN_TIMEOUT })
     this.callId = callId

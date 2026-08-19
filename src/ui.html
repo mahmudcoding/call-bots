@@ -111,7 +111,40 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
   }
   .field input[type=text]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,140,255,.18); }
-  .users-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+  .users-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 9px; max-height: 46vh; overflow-y: auto; padding-right: 4px; }
+  .users-grid::-webkit-scrollbar { width: 9px; }
+  .users-grid::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 6px; }
+  .users-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .users-toolbar input[type=search] {
+    flex: 1; height: 32px; padding: 0 11px; border-radius: var(--r-sm);
+    background: var(--card); border: 1px solid var(--line-2); outline: none; font-size: 13px;
+  }
+  .users-toolbar input[type=search]:focus { border-color: var(--accent); }
+  .quick { display: inline-flex; align-items: center; height: 32px; padding: 0 10px; border-radius: var(--r-sm);
+           background: var(--card-2); border: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--muted); }
+  .quick:hover { color: var(--text); border-color: var(--line-2); }
+
+  /* workspace + guests panels */
+  .mini {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm);
+    padding: 14px 16px; margin-top: 16px;
+  }
+  .mini h3 { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 4px; }
+  .mini .note { font-size: 12px; color: var(--faint); margin-bottom: 11px; }
+  .mini .row { display: flex; gap: 8px; align-items: center; }
+  .mini input[type=text] {
+    flex: 1; min-width: 0; height: 34px; padding: 0 11px; border-radius: var(--r-sm);
+    background: var(--panel); border: 1px solid var(--line-2); outline: none;
+    font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+  }
+  .mini input[type=text]:focus { border-color: var(--accent); }
+  .mini input[type=number] {
+    width: 74px; height: 34px; padding: 0 10px; border-radius: var(--r-sm);
+    background: var(--panel); border: 1px solid var(--line-2); outline: none; font-size: 13px;
+  }
+  .progress { height: 4px; border-radius: 3px; background: var(--card-2); overflow: hidden; margin-top: 10px; display: none; }
+  .progress.on { display: block; }
+  .progress i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
   .uchip {
     display: flex; align-items: center; gap: 10px; text-align: left;
     padding: 10px 12px; border-radius: var(--r-sm);
@@ -174,6 +207,12 @@
     padding: 3px 8px; border-radius: 999px;
   }
   .card.sharing .share-badge { display: inline-flex; }
+  .thumb .guest-badge {
+    position: absolute; left: 10px; top: 10px;
+    background: rgba(10,12,17,.78); backdrop-filter: blur(6px); color: var(--muted);
+    font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px;
+    border: 1px solid var(--line-2);
+  }
   .cbody { padding: 12px 14px 14px; }
   .who { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
   .ava { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; flex: none; }
@@ -295,8 +334,25 @@
 
         <div class="field" style="margin-bottom:0">
           <label>Simulated users</label>
+          <div class="users-toolbar">
+            <input type="search" id="userSearch" placeholder="Filter users…" spellcheck="false">
+            <button class="quick" data-pick="4">First 4</button>
+            <button class="quick" data-pick="8">First 8</button>
+            <button class="quick" data-pick="all">All</button>
+            <button class="quick" data-pick="none">None</button>
+          </div>
           <div class="users-grid" id="usersGrid"></div>
           <div class="hint" id="userHint">Select who joins the call.</div>
+
+          <div class="mini">
+            <h3>Workspace</h3>
+            <div class="note" id="wsNote">Paste a workspace invite link to add these users to it.</div>
+            <div class="row">
+              <input type="text" id="inviteLink" placeholder="https://…/invite?token=…" spellcheck="false">
+              <button class="btn" id="joinWsBtn">Join workspace</button>
+            </div>
+            <div class="progress" id="joinProgress"><i style="width:0%"></i></div>
+          </div>
         </div>
       </div>
 
@@ -330,6 +386,16 @@
       <div class="stats">
         <span class="chip" id="verifyChip" hidden>remote playing <b id="verifyVal">–</b></span>
         <span class="chip" id="frozenChip" hidden>frozen <b id="frozenVal">0</b></span>
+      </div>
+    </div>
+
+    <div class="mini" id="guestsPanel" style="margin:0 0 18px">
+      <h3>Guests</h3>
+      <div class="note" id="guestNote">Anonymous participants joining by invite link — no account needed.</div>
+      <div class="row">
+        <input type="number" id="guestCount" min="1" max="50" value="2">
+        <button class="btn -accent" id="addGuestsBtn">Add guests</button>
+        <input type="text" id="guestLink" placeholder="guest link (auto-detected when possible)" spellcheck="false">
       </div>
     </div>
 
@@ -393,6 +459,7 @@ const S = {
   cards: new Map(),
   thumbTimer: null,
   errorToasted: null,
+  lastJoinSummary: null,
 }
 
 /* ---------- launch panel ---------- */
@@ -405,6 +472,33 @@ const setMode = (mode) => {
 }
 $('#modeJoin').onclick = () => setMode('join')
 $('#modeCreate').onclick = () => setMode('create')
+
+const applyUserFilter = () => {
+  const q = ($('#userSearch').value || '').trim().toLowerCase()
+  for (const chip of document.querySelectorAll('#usersGrid .uchip')) {
+    chip.style.display = !q || chip.dataset.search.includes(q) ? '' : 'none'
+  }
+}
+$('#userSearch').oninput = applyUserFilter
+
+for (const btn of document.querySelectorAll('[data-pick]')) {
+  btn.onclick = () => {
+    const pick = btn.dataset.pick
+    S.selected.clear()
+    if (pick !== 'none') {
+      const visible = [...document.querySelectorAll('#usersGrid .uchip')]
+        .filter((chip) => chip.style.display !== 'none')
+      const take = pick === 'all' ? visible.length : Number(pick)
+      visible.slice(0, take).forEach((chip) => S.selected.add(chip.dataset.slug))
+    }
+    for (const chip of document.querySelectorAll('#usersGrid .uchip')) {
+      const on = S.selected.has(chip.dataset.slug)
+      chip.classList.toggle('on', on)
+      chip.setAttribute('aria-pressed', String(on))
+    }
+    updateUserHint()
+  }
+}
 
 const renderUserChips = (users) => {
   const grid = $('#usersGrid')
@@ -419,6 +513,8 @@ const renderUserChips = (users) => {
       <span style="min-width:0"><div class="nm">${esc(user.label)}</div><div class="em">${esc(user.email)}</div></span>
       <span class="tick"></span>`)
     chip.classList.toggle('on', S.selected.has(user.slug))
+    chip.dataset.slug = user.slug
+    chip.dataset.search = `${user.label} ${user.email}`.toLowerCase()
     chip.setAttribute('aria-label', `Toggle ${user.label}`)
     chip.setAttribute('aria-pressed', String(S.selected.has(user.slug)))
     chip.onclick = () => {
@@ -461,6 +557,42 @@ $('#launchBtn').onclick = async () => {
     toast(error.message, '-err')
   } finally {
     $('#launchBtn').disabled = false
+  }
+}
+
+/* ---------- workspace join ---------- */
+$('#joinWsBtn').onclick = async () => {
+  const invite = $('#inviteLink').value.trim()
+  if (!invite) return toast('Paste a workspace invite link first', '-warn')
+  const scope = S.selected.size > 0 ? [...S.selected] : []
+  const btn = $('#joinWsBtn')
+  btn.disabled = true
+  try {
+    await post('/api/join-workspace', { invite, users: scope })
+    toast(`Joining ${scope.length || 'all'} user(s) to the workspace…`, '-ok')
+    $('#logDrawer').classList.add('open')
+  } catch (error) {
+    toast(error.message, '-err')
+  } finally {
+    btn.disabled = false
+  }
+}
+
+/* ---------- guests ---------- */
+$('#addGuestsBtn').onclick = async () => {
+  const count = Number($('#guestCount').value) || 1
+  const link = $('#guestLink').value.trim()
+  const btn = $('#addGuestsBtn')
+  btn.disabled = true
+  btn.textContent = 'Adding…'
+  try {
+    const res = await post('/api/guests', { count, link: link || null })
+    toast(`${res.added} guest(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
+  } catch (error) {
+    toast(error.message, '-err')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Add guests'
   }
 }
 
@@ -517,13 +649,14 @@ const buildCard = (user) => {
       <img alt="" draggable="false" style="display:none">
       <span class="pill">–</span>
       <span class="share-badge">${I.share} sharing</span>
+      ${user.guest ? '<span class="guest-badge">Guest</span>' : ''}
     </div>
     <div class="cbody">
       <div class="who">
         <div class="ava" style="background:${esc(user.color)}">${esc(user.label[0].toUpperCase())}</div>
         <div style="min-width:0">
           <div class="nm">${esc(user.label)}</div>
-          <div class="em">${esc(user.email)}</div>
+          <div class="em">${user.guest ? 'guest — no account' : esc(user.email)}</div>
         </div>
       </div>
       <div class="controls">
@@ -652,6 +785,37 @@ const render = (state) => {
     toast(state.lastRunError, '-err')
   }
 
+  // workspace panel + join progress
+  const join = state.join
+  if (join) {
+    const bar = $('#joinProgress')
+    bar.classList.toggle('on', join.running)
+    if (join.running && join.total) {
+      bar.firstElementChild.style.width = `${Math.round((join.done / join.total) * 100)}%`
+    }
+    $('#joinWsBtn').disabled = join.running
+    $('#joinWsBtn').textContent = join.running ? `Joining ${join.done}/${join.total}…` : 'Join workspace'
+    // summaries arrive re-serialized on every snapshot, so compare by value —
+    // identity comparison would re-toast the same result forever
+    const summaryKey = join.summary ? JSON.stringify(join.summary) : null
+    // on first paint, adopt whatever is already there: a result from before
+    // this page loaded is history, not news
+    if (S.lastJoinSummary === null) S.lastJoinSummary = summaryKey ?? ''
+    else if (summaryKey && summaryKey !== S.lastJoinSummary) {
+      S.lastJoinSummary = summaryKey
+      const s = join.summary
+      toast(
+        `Workspace: ${s.joined} joined, ${s.already} already members` +
+          (s.failed ? `, ${s.failed} failed` : ''),
+        s.failed ? '-warn' : '-ok',
+      )
+    }
+  }
+  const ws = state.config?.workspace
+  $('#wsNote').textContent = ws
+    ? `Current workspace: ${state.config.workspaceName ? `${state.config.workspaceName} (${ws})` : ws} — paste another invite link to move or add users.`
+    : 'Paste a workspace invite link to add these users to it.'
+
   // launch panel
   if (!active) {
     if (state.config?.file) $('#cfgPath').textContent = state.config.file
@@ -690,6 +854,16 @@ const render = (state) => {
       $('#callIdText').textContent = session.callId
       chip.dataset.url = session.callUrl ?? ''
     } else chip.hidden = true
+
+    // guests panel: auto-fill the link once the tool knows it
+    const guestField = $('#guestLink')
+    if (session.guestLink && guestField.value.trim() === '' && guestField !== document.activeElement) {
+      guestField.value = session.guestLink
+      guestField.placeholder = 'guest link (auto-detected)'
+    }
+    $('#guestNote').textContent = session.guestLink
+      ? `Anonymous participants — link ready${session.guestCount ? `, ${session.guestCount} guest(s) in call` : ''}.`
+      : 'Anonymous participants — paste a guest link from the host\'s "Add to call" modal if none is detected.'
   }
 
   const verify = state.verify

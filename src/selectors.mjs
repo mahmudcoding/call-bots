@@ -37,6 +37,19 @@ export const SEL = {
   remoteTileVideo:
     '[data-testid="participant-tile"][data-local="false"] [data-testid="participant-video"]',
 
+  // guest entry (/join/<token>) — anonymous participants, no account.
+  // The form carries no testids; name attr + form submit are the stable seam,
+  // and the submit label varies ("Join call"/"Ask to join"/"Continue").
+  guestName: 'input[name="display_name"]',
+  guestPassword: 'input[name="meeting_password"]',
+  guestSubmit: 'form button[type="submit"]',
+  guestSurface: '[data-testid="guest-call-surface"]',
+  guestBlocked: '[data-testid="guest-join-blocked"]',
+  guestAutoJoin: '[data-testid="guest-auto-join-pending"]',
+  // host-side guest link inside the Add-to-call modal
+  guestLinkUrl: '[data-testid="guest-links-created-url"]',
+  guestLinkSection: '[data-testid="guest-links-section"]',
+
   // calls hub (create flow). "Start now" has no testid; it is structurally the
   // first button inside the header bar, which is locale-proof.
   callsHubHeaderBar: '[data-testid="calls-hub-header-bar"]',
@@ -58,6 +71,22 @@ export const API = {
 }
 
 export const callDeepLinkPath = (wsId, callId) => `/w/${wsId}/call/${callId}`
+export const guestJoinPath = (token) => `/join/${encodeURIComponent(token)}`
+
+// Accepts a full guest URL or a bare 64-hex token.
+export const parseGuestToken = (input) => {
+  const raw = String(input ?? '').trim()
+  if (!raw) throw new Error('no guest link provided')
+  if (!/^https?:\/\//u.test(raw)) return decodeURIComponent(raw)
+  try {
+    const url = new URL(raw)
+    const seg = url.pathname.split('/').filter(Boolean).pop()
+    if (!seg) throw new Error('empty')
+    return decodeURIComponent(seg)
+  } catch {
+    throw new Error(`could not read a guest token from "${input}"`)
+  }
+}
 export const callsHubPath = (wsId) => `/w/${wsId}/calls`
 export const loginPath = (next) => `/login?next=${encodeURIComponent(next)}`
 

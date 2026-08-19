@@ -41,6 +41,13 @@ export const activeMeetings = (page, wsId) =>
 export const leaveMeeting = (page, meetingId) =>
   inPageFetch(page, { url: API.meetingLeave(meetingId), method: 'POST' })
 
+// Guest links: listed for the host/admin, and creatable when none is active.
+export const listGuestLinks = (page, meetingId) =>
+  inPageFetch(page, { url: `${API.meetingBase}/${meetingId}/guest-links` })
+
+export const createGuestLink = (page, meetingId) =>
+  inPageFetch(page, { url: `${API.meetingBase}/${meetingId}/guest-links`, method: 'POST' })
+
 export const endMeeting = (page, meetingId) =>
   inPageFetch(page, { url: API.meetingEnd(meetingId), method: 'POST' })
 

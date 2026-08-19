@@ -3,5 +3,7 @@ node_modules/
 dist/
 fixtures/
 users.yaml
+users.lane-backup.yaml
+provision.env
 *.log
 .DS_Store

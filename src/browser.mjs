@@ -110,11 +110,13 @@ export const launchUser = async (user, media, options) => {
     )
     browser = await chromium.launch({ channel: fallback, headless, args })
   }
-  const state = statePath(user.email)
+  // Guests must never inherit a signed-in cookie: the guest entry page probes
+  // /auth/me and auto-joins as that account instead of showing the name form.
+  const state = user.anonymous ? null : statePath(user.email)
   const context = await browser.newContext({
     baseURL: options.baseUrl,
     viewport: { width: 960, height: 540 },
-    storageState: existsSync(state) ? state : undefined,
+    storageState: state && existsSync(state) ? state : undefined,
   })
   await context.grantPermissions(['camera', 'microphone'], { origin: options.baseUrl })
   context.setDefaultTimeout(20_000)

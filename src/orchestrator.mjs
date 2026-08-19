@@ -1,9 +1,17 @@
-import { activeMeetings, findParticipantCount } from './appApi.mjs'
+import {
+  activeMeetings,
+  createGuestLink,
+  findParticipantCount,
+  findStringField,
+  listGuestLinks,
+} from './appApi.mjs'
 import { RUN_MARKER, createRunDir, writeManifest } from './browser.mjs'
-import { ensureFixtures, userColorHex } from './fixtures.mjs'
+import { ensureFixtures, ensureGuestFixtures, guestColorHex, userColorHex } from './fixtures.mjs'
+import { GuestUser } from './guestuser.mjs'
 import { plain as log } from './log.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
 import { SimUser } from './simuser.mjs'
+import { parseGuestToken } from './selectors.mjs'
 
 const JOIN_CONCURRENCY = 2
 
@@ -35,10 +43,18 @@ export class Roster {
     this.options.runDir = this.runDir
     this.options.baseUrl = config.baseUrl
     this.simUsers = []
+    this.guests = []
+    this.guestToken = null
+    this.guestCounter = 0
     this.wsId = null
     this.callId = null
     this.createdCall = false
     this.tearingDown = false
+  }
+
+  // Everyone in the call: accounts first, then guests.
+  get members() {
+    return [...this.simUsers, ...this.guests]
   }
 
   #manifest(extra = {}) {
@@ -53,6 +69,7 @@ export class Roster {
         email: sim.user.email,
         state: sim.state,
       })),
+      guests: this.guests.map((guest) => ({ label: guest.label, state: guest.state })),
       ...extra,
     })
   }
@@ -103,6 +120,9 @@ export class Roster {
     await creator.ensureLoggedIn(`/w/${wsId}/calls`)
     this.callId = await creator.createCall(wsId)
     this.createdCall = true
+    // the create response carries the guest link, so guests need no host UI
+    this.guestToken = creator.guestToken ?? null
+    if (!this.guestToken) await this.#fetchGuestToken(creator)
     this.#manifest()
 
     const url = `${this.config.baseUrl}/w/${wsId}/call/${this.callId}`
@@ -130,12 +150,75 @@ export class Roster {
     return failures.length === 0
   }
 
+  // Guest links are readable by the host (and by anyone when the room setting
+  // allows). Any in-call sim can try; the first that succeeds wins.
+  async #fetchGuestToken(preferred) {
+    const candidates = [preferred, ...this.inCall()].filter(Boolean)
+    for (const sim of candidates) {
+      if (!this.callId || !sim.page) continue
+      const list = await listGuestLinks(sim.page, this.callId).catch(() => null)
+      const token = findStringField(list?.body ?? null, 'token')
+      if (token) {
+        this.guestToken = token
+        return token
+      }
+      const created = await createGuestLink(sim.page, this.callId).catch(() => null)
+      const newToken = findStringField(created?.body ?? null, 'token')
+      if (newToken) {
+        this.guestToken = newToken
+        return newToken
+      }
+    }
+    return null
+  }
+
+  // Adds N anonymous guests to the current call. `link` is optional: the token
+  // is normally already known from call creation or the guest-links API.
+  async addGuests(count, link = null) {
+    if (link) this.guestToken = parseGuestToken(link)
+    if (!this.guestToken) await this.#fetchGuestToken(null)
+    if (!this.guestToken) {
+      throw new Error(
+        'no guest link available — paste one from the host\'s "Add to call" modal',
+      )
+    }
+    const batch = Array.from({ length: count }, () => {
+      this.guestCounter += 1
+      const n = this.guestCounter
+      return {
+        n,
+        index: this.simUsers.length + n - 1,
+        label: `Guest ${n}`,
+        slug: `guest-${n}`,
+        email: null,
+      }
+    })
+    log.info(`generating/reusing fixtures for ${batch.length} guest(s)`)
+    const media = await ensureGuestFixtures(batch, this.options)
+    const guests = batch.map((guest) => new GuestUser(guest, media.get(guest.slug), this.options))
+    this.guests.push(...guests)
+    this.#manifest()
+
+    const failures = await pool(
+      guests,
+      async (guest) => {
+        guest.log.info('launching browser (guest)')
+        await guest.start()
+        await guest.joinGuest(this.guestToken, this.callId)
+      },
+      JOIN_CONCURRENCY,
+    )
+    for (const { item, error } of failures) item.log.error(error.message)
+    this.#manifest()
+    return { added: guests.length - failures.length, failed: failures.length }
+  }
+
   inCall() {
-    return this.simUsers.filter((sim) => sim.state === 'in-call')
+    return this.members.filter((sim) => sim.state === 'in-call')
   }
 
   bySlug(slug) {
-    return this.simUsers.find((sim) => sim.user.slug === slug) ?? null
+    return this.members.find((sim) => sim.user.slug === slug) ?? null
   }
 
   get callUrl() {
@@ -145,27 +228,34 @@ export class Roster {
 
   // Structured per-user snapshot for the dashboard and the REPL table.
   async statusData() {
-    const users = []
-    for (const [i, sim] of this.simUsers.entries()) {
+    const describe = async (sim, i, isGuest) => {
       const inCall = sim.state === 'in-call'
-      users.push({
+      return {
         index: i,
         slug: sim.user.slug,
         label: sim.label,
-        email: sim.user.email,
-        color: userColorHex(sim.user.index),
+        email: sim.user.email ?? null,
+        guest: isGuest,
+        color: isGuest ? guestColorHex(sim.user.n - 1) : userColorHex(sim.user.index),
         state: sim.state,
         mic: inCall ? await sim.micState().catch(() => 'unknown') : null,
         cam: inCall ? await sim.camState().catch(() => 'unknown') : null,
         sharing: sim.sharing === true,
         lastError: sim.lastError,
-      })
+      }
+    }
+    const users = []
+    for (const [i, sim] of this.simUsers.entries()) users.push(await describe(sim, i, false))
+    for (const [i, guest] of this.guests.entries()) {
+      users.push(await describe(guest, this.simUsers.length + i, true))
     }
     return {
       wsId: this.wsId,
       callId: this.callId,
       callUrl: this.callUrl,
       createdCall: this.createdCall,
+      guestLink: this.guestToken ? `${this.config.baseUrl}/join/${this.guestToken}` : null,
+      guestCount: this.guests.length,
       users,
     }
   }
@@ -234,7 +324,8 @@ export class Roster {
         }),
       ]).catch((error) => sim.log.warn(`teardown failed: ${error.message}`))
     }
-    await Promise.all(this.simUsers.filter((sim) => sim !== creator).map((sim) => bounded(sim)))
+    // guests first (they hold no call ownership), then members, creator last
+    await Promise.all(this.members.filter((sim) => sim !== creator).map((sim) => bounded(sim)))
     if (creator) {
       // creator goes last and ends the call it created, leaving staging tidy
       await bounded(creator, { endCall: true })

@@ -6,11 +6,16 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { bundledChromiumPath, systemChromePath } from './browser.mjs'
-import { loadConfig, projectRoot, resolveConfigPath } from './config.mjs'
+import { loadConfig, projectRoot, resolveConfigPath, updateConfigWorkspace } from './config.mjs'
 import { userColorHex } from './fixtures.mjs'
 import { onLog, plain as log } from './log.mjs'
 import { Roster } from './orchestrator.mjs'
 import { parseCallUrl } from './selectors.mjs'
+import {
+  discoverJoinedWorkspace,
+  extractInviteToken,
+  joinUsersToWorkspace,
+} from './workspace.mjs'
 
 const UI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'ui.html')
 
@@ -25,6 +30,15 @@ const session = {
   verify: null,
   startedAt: null,
   lastRunError: null,
+}
+
+// Workspace-join job state (independent of call sessions).
+const joinJob = {
+  running: false,
+  done: 0,
+  total: 0,
+  summary: null, // {joined, already, failed, workspace}
+  error: null,
 }
 
 const sseClients = new Set()
@@ -46,6 +60,7 @@ const configSnapshot = (configPath) => {
       file,
       baseUrl: config.baseUrl,
       workspace: config.workspace,
+      workspaceName: config.workspaceName,
       users: config.users.map((user) => ({
         slug: user.slug,
         label: user.label,
@@ -124,8 +139,75 @@ const stateSnapshot = async (configPath, { withVerify = false } = {}) => {
       config: configSnapshot(configPath),
       session: rosterState,
       verify: session.verify,
+      join: { ...joinJob },
     },
   }
+}
+
+// Logs every fleet user into the product and accepts the invite. HTTP only —
+// no browsers — so 100 users cost seconds, not gigabytes.
+const runJoinWorkspace = async (configPath, body) => {
+  if (joinJob.running) throw new Error('a workspace join is already running')
+  const config = loadConfig(configPath)
+  const token = extractInviteToken(body.invite)
+  const selected =
+    Array.isArray(body.users) && body.users.length > 0
+      ? config.users.filter((user) => body.users.includes(user.slug))
+      : config.users
+  if (selected.length === 0) throw new Error('no users selected')
+
+  const apiBase = `${config.baseUrl}/stg/api/v1`
+  joinJob.running = true
+  joinJob.done = 0
+  joinJob.total = selected.length
+  joinJob.summary = null
+  joinJob.error = null
+  log.info(`joining ${selected.length} user(s) to a workspace (token …${token.slice(-6)})`)
+
+  ;(async () => {
+    try {
+      const results = await joinUsersToWorkspace({
+        apiBase,
+        users: selected,
+        token,
+        onProgress: (done, total, outcome) => {
+          joinJob.done = done
+          if (!outcome.ok) log.warn(`  ${outcome.label}: ${outcome.state} (${outcome.detail})`)
+          if (done === 1 || done % 10 === 0 || done === total) {
+            log.info(`  joined ${done}/${total}…`)
+          }
+        },
+      })
+      const joined = results.filter((r) => r.state === 'joined').length
+      const already = results.filter((r) => r.state === 'already_member').length
+      const failed = results.filter((r) => !r.ok)
+      log.info(
+        `workspace join finished: ${joined} joined, ${already} already members, ${failed.length} failed`,
+      )
+
+      let workspace = null
+      const anySession = results.find((r) => r.ok && r.session)?.session
+      if (anySession) {
+        workspace = await discoverJoinedWorkspace(anySession).catch(() => null)
+        if (workspace) {
+          const file = updateConfigWorkspace(configPath, workspace.id, workspace.name)
+          log.info(
+            `workspace set to ${workspace.name || workspace.id} (${workspace.id})` +
+              (file ? ` in ${file}` : ''),
+          )
+        } else {
+          log.warn('joined, but could not read the workspace id — set it manually if needed')
+        }
+      }
+      joinJob.summary = { joined, already, failed: failed.length, workspace }
+    } catch (error) {
+      joinJob.error = error.message
+      log.error(`workspace join failed: ${error.message}`)
+    } finally {
+      joinJob.running = false
+      broadcast(await stateSnapshot(configPath))
+    }
+  })()
 }
 
 const readBody = (request) =>
@@ -339,6 +421,23 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
       if (request.method === 'POST' && url.pathname === '/api/stop') {
         stopSession(configPath)
         json(response, 200, { ok: true })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/guests') {
+        const body = await readBody(request)
+        if (!session.roster || session.status !== 'running') {
+          throw new Error('start a session before adding guests')
+        }
+        const count = Math.max(1, Math.min(50, Number(body.count) || 1))
+        const result = await session.roster.addGuests(count, body.link ?? null)
+        broadcast(await stateSnapshot(configPath))
+        json(response, 200, { ok: true, ...result })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/join-workspace') {
+        await runJoinWorkspace(configPath, await readBody(request))
+        json(response, 200, { ok: true })
+        broadcast(await stateSnapshot(configPath))
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/quit') {

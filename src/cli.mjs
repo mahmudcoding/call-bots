@@ -17,6 +17,7 @@ usage:
   calls-sim join <call-url> [options]   join an existing call (paste its URL)
   calls-sim create [options]            first sim user creates an Open call,
                                         prints its URL, the rest join it
+  calls-sim join-workspace <invite>     join fleet users to a workspace
   calls-sim fixtures [--regen]          (re)generate per-user media fixtures
   calls-sim doctor                      check browser, TTS, config, staging
   calls-sim clean                       kill leftover sim browser processes
@@ -25,6 +26,7 @@ options:
   --config <path>       config file (default ./users.yaml)
   --users <n>           use the first n users from the config
   --only <a,b>          use only these labels (comma-separated)
+  --guests <n>          also add n anonymous guests after the users join
   --ws <id>             workspace id for create (default: config "workspace")
   --headed              show browser windows (default: headless)
   --browser <name>      chrome (default, system Chrome) or chromium (bundled)
@@ -46,6 +48,7 @@ const parseCli = () => {
       config: { type: 'string' },
       users: { type: 'string' },
       only: { type: 'string' },
+      guests: { type: 'string' },
       ws: { type: 'string' },
       headed: { type: 'boolean', default: false },
       browser: { type: 'string', default: 'chrome' },
@@ -96,7 +99,7 @@ const buildOptions = (values) => ({
   regen: values.regen,
 })
 
-const withRoster = async (roster, runFlow) => {
+const withRoster = async (roster, runFlow, { guests = 0 } = {}) => {
   let interrupted = 0
   const onSigint = () => {
     interrupted += 1
@@ -125,6 +128,14 @@ const withRoster = async (roster, runFlow) => {
       return
     }
     if (!ok) log.warn('some users failed to join — roster is partial (see errors above)')
+    if (guests > 0) {
+      log.info(`adding ${guests} guest(s)`)
+      const result = await roster.addGuests(guests).catch((error) => {
+        log.error(`guests: ${error.message}`)
+        return null
+      })
+      if (result) log.info(`guests in call: ${result.added}${result.failed ? `, failed ${result.failed}` : ''}`)
+    }
     console.log(`\n${await roster.statusTable()}`)
     await startRepl(roster)
     await roster.teardownAll()
@@ -177,13 +188,43 @@ const main = async () => {
     return
   }
 
+  const guests = Number(values.guests) || 0
+
+  if (command === 'join-workspace') {
+    const invite = positionals[0]
+    if (!invite) throw new Error('usage: calls-sim join-workspace <invite-link>')
+    const { joinUsersToWorkspace, discoverJoinedWorkspace, extractInviteToken, logJoinSummary } =
+      await import('./workspace.mjs')
+    const { updateConfigWorkspace } = await import('./config.mjs')
+    const token = extractInviteToken(invite)
+    log.info(`joining ${users.length} user(s) to a workspace (token …${token.slice(-6)})`)
+    const results = await joinUsersToWorkspace({
+      apiBase: `${config.baseUrl}/stg/api/v1`,
+      users,
+      token,
+      onProgress: (done, total) => {
+        if (done === 1 || done % 10 === 0 || done === total) log.info(`  ${done}/${total}…`)
+      },
+    })
+    logJoinSummary(results)
+    const session = results.find((r) => r.ok && r.session)?.session
+    if (session) {
+      const workspace = await discoverJoinedWorkspace(session).catch(() => null)
+      if (workspace) {
+        updateConfigWorkspace(values.config ?? null, workspace.id, workspace.name)
+        log.info(`workspace set to ${workspace.name || workspace.id} (${workspace.id})`)
+      }
+    }
+    return
+  }
+
   if (command === 'join') {
     const target = positionals[0]
     if (!target) throw new Error('usage: calls-sim join <call-url>')
     const { wsId, callId } = parseCallUrl(target, config.baseUrl)
     log.info(`joining call ${callId} in workspace ${wsId} with ${users.length} user(s)`)
     const roster = new Roster(config, options)
-    await withRoster(roster, () => roster.joinExisting(users, wsId, callId))
+    await withRoster(roster, () => roster.joinExisting(users, wsId, callId), { guests })
     return
   }
 
@@ -192,7 +233,7 @@ const main = async () => {
     if (!wsId) throw new Error('create needs --ws <workspaceId> or "workspace" in users.yaml')
     log.info(`creating an Open call in workspace ${wsId} with ${users.length} user(s)`)
     const roster = new Roster(config, options)
-    await withRoster(roster, () => roster.createAndJoin(users, wsId))
+    await withRoster(roster, () => roster.createAndJoin(users, wsId), { guests })
     return
   }
 

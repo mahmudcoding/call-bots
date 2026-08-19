@@ -70,6 +70,14 @@ control room for the whole session:
 - pick users (color-coded to match their published video), join an existing
   call by URL or create a fresh Open call, with headed / no-video / no-audio
   toggles;
+- **Workspace panel** — paste any workspace invite link and the app signs every
+  selected user in and accepts the invite (pure HTTP, no browsers: 100 users in
+  about 80 seconds). The joined workspace is saved to the config, so "Create
+  new call" immediately targets it. Re-usable any time to move the fleet into
+  another workspace;
+- **Guests panel** — add any number of anonymous guests to a running call. They
+  join through the guest invite link (no accounts), and the link is detected
+  automatically when the app created the call;
 - one card per simulated user with a **live thumbnail of what that user's
   browser actually sees**, state pill, and one-click mic / camera / screen
   share / screenshot / leave / rejoin;
@@ -81,14 +89,32 @@ control room for the whole session:
 
 ```bash
 node src/cli.mjs join "https://airion-cargo.store/w/<WS>/call/<CALL>" --users 4
-node src/cli.mjs create --users 4
+node src/cli.mjs create --users 4 --guests 3
+node src/cli.mjs join-workspace "<workspace-invite-link>"
 ```
 
 Both end in an interactive console: `status`, `mute <n|all>`, `unmute`,
-`cam <n|all> on|off`, `share <n> [stop]`, `leave <n>`, `rejoin <n>`,
-`shot [n]`, `quit`. `Ctrl-C` tears down cleanly; `npm run clean` removes
-leftover browser processes after a hard kill (works on Windows too, via a
-process-marker sweep).
+`cam <n|all> on|off`, `share <n> [stop]`, `guests <n>`, `leave <n>`,
+`rejoin <n>`, `shot [n]`, `quit`. `Ctrl-C` tears down cleanly; `npm run clean`
+removes leftover browser processes after a hard kill (works on Windows too, via
+a process-marker sweep).
+
+### Provisioning accounts
+
+`scripts/provision-fleet.mjs` creates the dedicated accounts this tool drives:
+it registers `user1@aloqa.calls` … `userN@aloqa.calls` (names `Call User N`,
+shared password `password`) through the product's own registration endpoint,
+marks them email-verified with a single exact-email SQL statement, checks every
+login, and writes `users.yaml`. It needs a gitignored `provision.env` with the
+staging Postgres credentials. It is idempotent — re-running skips accounts that
+already exist.
+
+```bash
+node scripts/provision-fleet.mjs --count 100
+```
+
+Accounts start with no workspace: use the dashboard's **Workspace panel** (or
+`join-workspace`) to put them wherever you need them.
 
 ### Other commands and flags
 

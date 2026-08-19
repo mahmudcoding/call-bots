@@ -8,6 +8,7 @@ const HELP = `commands:
   share <n> [stop]           start/stop screen share (experimental)
   leave <n>                  user leaves the call
   rejoin <n>                 user joins again
+  guests <n> [link]          add n anonymous guests to the call
   shot [n]                   save screenshot(s) into the run dir
   help                       this text
   quit                       everyone leaves, browsers close, exit`
@@ -64,6 +65,12 @@ export const startRepl = (roster) =>
             console.log(error.message)
           }
         }
+      },
+      guests: async ([count, link]) => {
+        const n = Number(count)
+        if (!Number.isInteger(n) || n < 1) return console.log('usage: guests <n> [link]')
+        const result = await roster.addGuests(n, link ?? null)
+        console.log(`guests added: ${result.added}${result.failed ? `, failed: ${result.failed}` : ''}`)
       },
       shot: async ([who]) => {
         for (const sim of who ? pick(who) : roster.simUsers) {
