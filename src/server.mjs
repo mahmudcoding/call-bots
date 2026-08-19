@@ -189,12 +189,6 @@ const runAction = async (slug, action) => {
       case 'cam-off':
         results[guest.label] = await guest.setCam(false)
         break
-      case 'share':
-        results[guest.label] = await guest.setShare(true)
-        break
-      case 'share-stop':
-        results[guest.label] = await guest.setShare(false)
-        break
       case 'leave':
         await roster.remove(guest.user.slug)
         results[guest.label] = 'removed'

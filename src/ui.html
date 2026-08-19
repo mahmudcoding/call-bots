@@ -135,12 +135,6 @@
   }
   @keyframes shimmer { to { background-position: -120% 0; } }
   .thumb .pill { position: absolute; left: 10px; bottom: 10px; background: rgba(10,12,17,.78); backdrop-filter: blur(6px); }
-  .thumb .share-badge {
-    position: absolute; right: 10px; top: 10px; display: none; align-items: center; gap: 5px;
-    background: rgba(109,94,252,.92); color: #fff; font-size: 11px; font-weight: 700;
-    padding: 3px 8px; border-radius: 999px;
-  }
-  .card.sharing .share-badge { display: inline-flex; }
   .cbody { padding: 12px 14px 14px; }
   .who { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
   .ava { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; flex: none; }
@@ -197,7 +191,6 @@
   <span id="statusPill" class="pill">idle</span>
   <div class="spacer"></div>
   <button id="stopBtn" class="btn -danger" hidden>Stop</button>
-  <button id="quitBtn" class="btn" title="Close Call Bots">Quit</button>
 </header>
 
 <main>
@@ -244,7 +237,6 @@ const I = {
   micOff: svg('<line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/>'),
   cam: svg('<path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/>'),
   camOff: svg('<path d="M10.66 6H14a2 2 0 0 1 2 2v2.5l5.248-3.062A.5.5 0 0 1 22 7.87v8.196"/><path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"/><path d="m2 2 20 20"/>'),
-  share: svg('<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>'),
   leave: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>'),
 }
 
@@ -318,13 +310,6 @@ const twoStep = (id, confirmLabel, action) => {
   }
 }
 twoStep('#stopBtn', 'Confirm', () => post('/api/stop').catch((e) => toast(e.message, '-err')))
-twoStep('#quitBtn', 'Confirm', async (btn) => {
-  btn.disabled = true
-  await post('/api/quit').catch(() => {})
-  document.body.innerHTML =
-    '<div style="display:grid;place-items:center;height:100vh;color:#8b93a3;font-size:15px">' +
-    'Closed — you can close this window.</div>'
-})
 
 for (const btn of document.querySelectorAll('[data-all]')) {
   btn.onclick = async () => {
@@ -345,7 +330,6 @@ const buildCard = (guest) => {
       <div class="skeleton">connecting…</div>
       <img alt="" draggable="false" style="display:none">
       <span class="pill">–</span>
-      <span class="share-badge">${I.share} sharing</span>
     </div>
     <div class="cbody">
       <div class="who">
@@ -357,7 +341,6 @@ const buildCard = (guest) => {
       <div class="controls">
         <button class="ibtn" data-act="mic" title="Toggle microphone">${I.mic}</button>
         <button class="ibtn" data-act="cam" title="Toggle camera">${I.cam}</button>
-        <button class="ibtn" data-act="share" title="Toggle screen share">${I.share}</button>
         <span class="gap"></span>
         <button class="ibtn" data-act="leave" title="Remove this guest">${I.leave}</button>
       </div>
@@ -375,13 +358,11 @@ const cardAction = async (slug, act, btn) => {
   let action = act
   if (act === 'mic') action = guest.mic === 'off' ? 'unmute' : 'mute'
   if (act === 'cam') action = guest.cam === 'off' ? 'cam-on' : 'cam-off'
-  if (act === 'share') action = guest.sharing ? 'share-stop' : 'share'
   btn.classList.add('busy')
   try {
     const { results } = await post('/api/action', { slug, action })
     const result = results[guest.label]
-    if (result === 'requested') toast(`${guest.label}: screen share needs host approval`, '-warn')
-    else if (result === 'request') toast(`${guest.label}: the host restricted this device`, '-warn')
+    if (result === 'request') toast(`${guest.label}: the host restricted this device`, '-warn')
   } catch (error) {
     toast(`${guest.label}: ${error.message}`, '-err')
   } finally {
@@ -405,7 +386,6 @@ const updateCard = (guest) => {
   const pill = $('.thumb .pill', card)
   pill.textContent = failed ? 'error' : (STATE_LABEL[base] ?? base)
   pill.className = `pill -${base}`
-  card.classList.toggle('sharing', guest.sharing)
   card.classList.toggle('has-error', Boolean(guest.lastError) && failed)
   $('.err', card).textContent = guest.lastError ?? ''
 
@@ -420,9 +400,6 @@ const updateCard = (guest) => {
   cam.className = `ibtn${guest.cam === 'off' ? ' -off' : ''}${guest.cam === 'request' ? ' -req' : ''}${cam.classList.contains('busy') ? ' busy' : ''}`
   cam.disabled = !inCall
 
-  const share = $('[data-act=share]', card)
-  share.className = `ibtn${guest.sharing ? ' -live' : ''}${share.classList.contains('busy') ? ' busy' : ''}`
-  share.disabled = !inCall
   $('[data-act=leave]', card).disabled = ['created', 'closed'].includes(guest.state)
 }
 

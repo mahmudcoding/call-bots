@@ -21,10 +21,8 @@ export const SEL = {
   camPair: '[data-testid="cam-control-pair"]',
   micRequest: '[data-testid="call-controls-mic-request"]',
   camRequest: '[data-testid="call-controls-camera-request"]',
-  screenShare: '[data-testid="call-controls-screen-share"]',
 
   // participant grid
-  shareLayout: '[data-grid-layout="screen-share"]',
   tile: '[data-testid="participant-tile"]',
 }
 

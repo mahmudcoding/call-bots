@@ -120,7 +120,6 @@ export class Roster {
         state: guest.state,
         mic: inCall ? await guest.micState().catch(() => 'unknown') : null,
         cam: inCall ? await guest.camState().catch(() => 'unknown') : null,
-        sharing: guest.sharing === true,
         lastError: guest.lastError,
       })
     }

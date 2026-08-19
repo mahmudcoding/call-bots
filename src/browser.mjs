@@ -50,23 +50,20 @@ const resolveChannel = (preference) => {
     resolved = 'chromium'
     return undefined
   }
-  throw new Error('no browser found: install Google Chrome, or run `npm run setup`')
+  throw new Error('no browser found: install Google Chrome, or run: npx playwright install chromium')
 }
-
-export const shareTabTitle = (guest) => `SIM-SHARE-${guest.slug}`
 
 // The marker arg lets `clean` find leftover processes after a hard kill.
 export const RUN_MARKER = '--call-bots-run'
 
 const buildArgs = (guest, media, options) => {
   // No --use-fake-ui-for-media-stream: permissions come from grantPermissions,
-  // and that flag hijacks getDisplayMedia away from the tab-by-title selector.
+  // and that flag overrides the fake capture files.
   const args = [
     '--use-fake-device-for-media-stream',
     '--autoplay-policy=no-user-gesture-required',
     // publish audio without playing every bot through the speakers
     '--mute-audio',
-    `--auto-select-tab-capture-source-by-title=${shareTabTitle(guest)}`,
     `${RUN_MARKER}=${options.runId}`,
   ]
   if (media && !options.noVideo) args.push(`--use-file-for-fake-video-capture=${media.video}`)

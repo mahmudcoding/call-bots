@@ -1,4 +1,4 @@
-import { launchGuest, shareTabTitle } from './browser.mjs'
+import { launchGuest } from './browser.mjs'
 import { failureShot, mkLogger } from './log.mjs'
 import { SEL, guestJoinPath } from './selectors.mjs'
 
@@ -19,8 +19,6 @@ export class Guest {
     this.browser = null
     this.context = null
     this.page = null
-    this.shareTab = null
-    this.sharing = false
     this.lastError = null
   }
 
@@ -151,47 +149,6 @@ export class Guest {
 
   setCam(on) {
     return this.#setDevice('camera', SEL.camPair, SEL.camRequest, on)
-  }
-
-  // The launch flag auto-selects the tab titled SIM-SHARE-<slug>, so the share
-  // picker never appears; the grid layout switching is the proof it worked.
-  async setShare(onValue) {
-    const on = onValue !== false
-    if (on && !this.shareTab) {
-      this.shareTab = await this.context.newPage()
-      await this.shareTab.setContent(
-        `<title>${shareTabTitle(this.user)}</title>
-         <body style="margin:0;display:grid;place-items:center;height:100vh;background:#102030;color:#fff;font-family:sans-serif">
-           <div style="text-align:center">
-             <h1 style="font-size:64px;margin:0">${this.label} — SHARED</h1>
-             <div id="clock" style="font-size:48px;margin-top:24px"></div>
-           </div>
-           <script>setInterval(() => { document.getElementById('clock').textContent = new Date().toISOString().slice(11, 21) }, 100)</script>
-         </body>`,
-      )
-      await this.page.bringToFront().catch(() => {})
-    }
-    const button = this.page.locator(SEL.screenShare)
-    if (!(await button.isVisible().catch(() => false))) {
-      this.log.warn('screen-share control not available for this guest')
-      return 'unavailable'
-    }
-    const layout = this.page.locator(SEL.shareLayout).first()
-    if ((await layout.isVisible().catch(() => false)) === on) {
-      this.sharing = on
-      return on ? 'sharing' : 'idle'
-    }
-    await button.click()
-    const ok = await layout
-      .waitFor({ state: on ? 'visible' : 'hidden', timeout: 8000 })
-      .then(() => true)
-      .catch(() => false)
-    if (!ok && on) {
-      this.log.warn('share needs host approval — approve it, then try again')
-      return 'requested'
-    }
-    this.sharing = await layout.isVisible().catch(() => false)
-    return this.sharing ? 'sharing' : 'idle'
   }
 
   // Buttons are not proof: check that remote <video> elements really play.
