@@ -9,6 +9,7 @@ import { RUN_MARKER, createRunDir, writeManifest } from './browser.mjs'
 import { ensureFixtures, ensureGuestFixtures, guestColorHex, userColorHex } from './fixtures.mjs'
 import { GuestUser } from './guestuser.mjs'
 import { plain as log } from './log.mjs'
+import { concurrencyWarning } from './machine.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
 import { SimUser } from './simuser.mjs'
 import { parseGuestToken } from './selectors.mjs'
@@ -75,12 +76,8 @@ export class Roster {
   }
 
   async #prepare(users) {
-    if (users.length > 6) {
-      log.warn(
-        `${users.length} users requested — on a 16 GB Mac more than ~6 publishing ` +
-          `browsers will contend for CPU and can degrade the media itself.`,
-      )
-    }
+    const warning = concurrencyWarning(users.length)
+    if (warning) log.warn(warning)
     log.info(`generating/reusing fixtures for ${users.length} user(s)`)
     const media = await ensureFixtures(users, this.options)
     return users.map((user) => new SimUser(user, media.get(user.slug), this.options))

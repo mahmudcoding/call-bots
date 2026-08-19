@@ -352,12 +352,6 @@
             <input type="text" id="callUrl" placeholder="paste the call URL or its guest invite link" spellcheck="false">
           </div>
 
-          <div class="field">
-            <label>Guests</label>
-            <input type="number" id="guestsAtLaunch" min="0" max="50" value="0"
-                   style="width:90px;height:42px;padding:0 14px;border-radius:var(--r-sm);background:var(--card);border:1px solid var(--line-2);outline:none;font-size:14px">
-          </div>
-
           <div class="opts">
             <label class="opt"><input type="checkbox" id="optHeaded"><span class="sw"></span>Show browser windows</label>
             <label class="opt"><input type="checkbox" id="optNoVideo"><span class="sw"></span>Join without camera</label>
@@ -560,15 +554,24 @@ const renderUserChips = (users) => {
 const updateUserHint = () => {
   const n = S.selected.size
   const hint = $('#userHint')
-  if (n > 6) { hint.className = 'hint -warn'; hint.textContent = `${n} users — above ~6 concurrent publishers, CPU contention can degrade the media itself on a 16 GB Mac.` }
-  else { hint.className = 'hint'; hint.textContent = n === 0 ? 'Select who joins the call.' : `${n} user${n === 1 ? '' : 's'} selected.` }
+  // the ceiling is measured from THIS machine, not assumed
+  const max = S.state?.machine?.recommendedMax ?? 6
+  if (n > max) {
+    const m = S.state?.machine
+    hint.className = 'hint -warn'
+    hint.textContent =
+      `${n} users — above about ${max} publishing at once, CPU contention can degrade ` +
+      `the media itself on this machine${m ? ` (${m.memGB} GB RAM, ${m.cores} cores)` : ''}.`
+  } else {
+    hint.className = 'hint'
+    hint.textContent = n === 0 ? 'Select who joins the call.' : `${n} user${n === 1 ? '' : 's'} selected.`
+  }
 }
 
 $('#launchBtn').onclick = async () => {
   try {
     const body = {
       link: $('#callUrl').value.trim(),
-      guests: Number($('#guestsAtLaunch').value) || 0,
       users: [...S.selected],
       headed: $('#optHeaded').checked,
       noVideo: $('#optNoVideo').checked,

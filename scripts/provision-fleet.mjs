@@ -26,12 +26,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const stamp = () => new Date().toISOString().slice(11, 19)
 const log = (...a) => console.log(stamp(), ...a)
 
-// user1@aloqa.calls / "Call User 1" / label User1
+// user1@aloqa.calls / "Call User 1" / label "User 1"
 const fleetUser = (n) => ({
   n,
   email: `user${n}@aloqa.calls`,
   name: `Call User ${n}`,
-  label: `User${n}`,
+  label: `User ${n}`,
 })
 
 const loadEnv = () => {

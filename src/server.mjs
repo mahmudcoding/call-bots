@@ -9,6 +9,7 @@ import { bundledChromiumPath, systemChromePath } from './browser.mjs'
 import { loadConfig, projectRoot, resolveConfigPath, updateConfigWorkspace } from './config.mjs'
 import { userColorHex } from './fixtures.mjs'
 import { onLog, plain as log } from './log.mjs'
+import { machineProfile } from './machine.mjs'
 import { Roster } from './orchestrator.mjs'
 import { classifyTarget } from './selectors.mjs'
 import {
@@ -137,6 +138,7 @@ const stateSnapshot = async (configPath, { withVerify = false } = {}) => {
       startedAt: session.startedAt,
       lastRunError: session.lastRunError,
       config: configSnapshot(configPath),
+      machine: machineProfile(),
       session: rosterState,
       verify: session.verify,
       join: { ...joinJob },
