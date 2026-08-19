@@ -22,8 +22,10 @@ options:
   --guests <n>       how many guests to send (default 2)
   --headed           show the guest browser windows (default: headless)
   --browser <name>   chrome, chromium, or auto (default)
-  --no-video         join with the camera off
-  --no-audio         join with the microphone muted
+  --camera <on|off>  arrive with the camera on or off (default on)
+  --mic <on|off>     arrive with the microphone on or off (default on)
+  --no-video         attach no camera video at all (cheaper for a load run)
+  --no-audio         attach no microphone audio at all
   --size <WxH>       camera video size (default 1920x1080, even dimensions)
   --fps <n>          camera video frame rate (default 12)
   --regen            rebuild the media even if it is cached
@@ -38,6 +40,8 @@ const parseCli = () => {
       guests: { type: 'string' },
       headed: { type: 'boolean', default: false },
       browser: { type: 'string', default: 'auto' },
+      camera: { type: 'string', default: 'on' },
+      mic: { type: 'string', default: 'on' },
       'no-video': { type: 'boolean', default: false },
       'no-audio': { type: 'boolean', default: false },
       size: { type: 'string', default: '1920x1080' },
@@ -57,6 +61,9 @@ const buildOptions = (values, baseUrl) => ({
   browser: values.browser,
   noVideo: values['no-video'],
   noAudio: values['no-audio'],
+  // The state a bot arrives in; its clip and voice stay attached either way.
+  startCam: values.camera !== 'off',
+  startMic: values.mic !== 'off',
   size: values.size,
   fps: Number(values.fps) || 12,
   regen: values.regen,

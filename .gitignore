@@ -7,3 +7,4 @@ users.lane-backup.yaml
 provision.env
 *.log
 .DS_Store
+.server/

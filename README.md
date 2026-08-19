@@ -85,6 +85,37 @@ Shipped footage lives in `media/` (copied into the `.app` at build time).
 Imported clips and run data live in `~/Library/Application Support/CallBots` on
 macOS (`CALL_BOTS_HOME` overrides it).
 
+## Running it on a server
+
+`run.sh` sets up an Ubuntu server from nothing and sends the bots in:
+
+```bash
+./run.sh --install-deps --check                     # first time, once
+./run.sh --link "<invite-link>" --bots 10 --camera off --mic off
+./run.sh --link "<invite-link>" --ui                # dashboard instead
+./run.sh --clean                                    # remove everything it made
+```
+
+Everything it installs — its own Node, its own Chromium, its own npm cache and
+run data — lives in `./.server`, about 1.2 GB. Nothing is written outside that
+directory and nothing is installed globally, so `--clean` removes all of it.
+
+The single exception is Chromium's shared libraries, which only apt can
+provide. The script never installs them silently: it checks, tells you if any
+are missing, and installs them only when you pass `--install-deps`.
+
+Two things matter on a server. Use entry mode **Open**, because nobody is there
+to admit bots from a lobby. And the dashboard binds to localhost, so reach it
+over a tunnel rather than opening a port:
+
+```bash
+ssh -L 4610:127.0.0.1:4610 <user>@<server>
+```
+
+Verified end to end on Ubuntu 24.04: setup from a bare image, browser starts,
+and a bot reaches the product. Sizing is per machine — `--check` reports what
+that one can carry.
+
 ## Notes
 
 - The realistic ceiling is what `doctor` reports for your machine (measured from

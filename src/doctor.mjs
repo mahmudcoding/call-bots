@@ -1,4 +1,8 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { bundledChromiumPath, systemChromePath } from './browser.mjs'
+import { bundledMediaDir } from './config.mjs'
 import { machineProfile } from './machine.mjs'
 import { detectTtsEngine } from './tts.mjs'
 
@@ -22,12 +26,20 @@ export const collectChecks = async () => {
   else if (chromium) checks.push(ok('browser', 'bundled Chromium (Playwright)'))
   else checks.push(bad('browser', 'none found — install Google Chrome or run: npx playwright install chromium'))
 
+  // Voices ship with the app, so a machine with no text-to-speech is fine —
+  // it only matters for a bot beyond the shipped set on a machine that has no
+  // imported voice either.
+  const shipped = existsSync(join(bundledMediaDir, 'voice-1.wav'))
   const tts = await detectTtsEngine()
-  checks.push(
-    tts === 'tones'
-      ? warn('speech', 'no system text-to-speech — guests will publish tones instead of speech')
-      : ok('speech', `system text-to-speech via ${tts}`),
-  )
+  if (shipped) {
+    checks.push(ok('speech', 'bundled voices'))
+  } else {
+    checks.push(
+      tts === 'tones'
+        ? warn('speech', 'no voices bundled and no system text-to-speech — bots will publish tones')
+        : ok('speech', `system text-to-speech via ${tts}`),
+    )
+  }
 
   const machine = machineProfile()
   checks.push(
