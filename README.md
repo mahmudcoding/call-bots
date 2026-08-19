@@ -90,7 +90,6 @@ macOS (`CALL_BOTS_HOME` overrides it).
 `run.sh` sets up an Ubuntu server from nothing and sends the bots in:
 
 ```bash
-./run.sh --install-deps --check                     # first time, once
 ./run.sh --link "<invite-link>" --bots 10 --camera off --mic off
 ./run.sh --link "<invite-link>" --ui                # dashboard instead
 ./run.sh --clean                                    # remove everything it made
@@ -101,8 +100,18 @@ run data — lives in `./.server`, about 1.2 GB. Nothing is written outside that
 directory and nothing is installed globally, so `--clean` removes all of it.
 
 The single exception is Chromium's shared libraries, which only apt can
-provide. The script never installs them silently: it checks, tells you if any
-are missing, and installs them only when you pass `--install-deps`.
+provide. Those are installed system-wide, and only when Chromium actually fails
+to start — the script tries first and does nothing if the machine already has
+what it needs.
+
+That apt step is the one thing that could affect the rest of the server, so it
+runs under a config that forbids apt from removing or upgrading anything. If
+the libraries would conflict with something already installed, the install is
+refused and nothing changes, rather than apt quietly removing a package another
+service depends on. `--no-deps` skips the step entirely.
+
+If Chromium still will not start after that, the distribution is likely older
+than the browser expects, which apt cannot fix — run it in a container instead.
 
 Two things matter on a server. Use entry mode **Open**, because nobody is there
 to admit bots from a lobby. And the dashboard binds to localhost, so reach it
@@ -112,8 +121,9 @@ over a tunnel rather than opening a port:
 ssh -L 4610:127.0.0.1:4610 <user>@<server>
 ```
 
-Verified end to end on Ubuntu 24.04: setup from a bare image, browser starts,
-and a bot reaches the product. Sizing is per machine — `--check` reports what
+Verified end to end on a bare Ubuntu 24.04 image with no curl, no Node and no
+Chromium: one command installs everything and sends the bot. A second run
+starts in about a second. Sizing is per machine — `--check` reports what
 that one can carry.
 
 ## Notes
