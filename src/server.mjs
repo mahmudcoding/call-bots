@@ -248,10 +248,10 @@ const launchSession = async (configPath, body) => {
   const users = selected.map((user, index) => ({ ...user, index }))
 
   const options = {
-    headed: Boolean(body.headed),
+    headed: false,
     browser: body.browser === 'chromium' ? 'chromium' : 'chrome',
-    noVideo: Boolean(body.noVideo),
-    noAudio: Boolean(body.noAudio),
+    noVideo: false,
+    noAudio: false,
     size: '1920x1080',
     fps: 12,
     regen: false,
