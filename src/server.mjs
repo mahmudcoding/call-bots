@@ -1,10 +1,12 @@
-import { execFile } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { execFile, spawn } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import http from 'node:http'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { loadConfig } from './config.mjs'
+import { bundledChromiumPath, systemChromePath } from './browser.mjs'
+import { loadConfig, projectRoot, resolveConfigPath } from './config.mjs'
 import { userColorHex } from './fixtures.mjs'
 import { onLog, plain as log } from './log.mjs'
 import { Roster } from './orchestrator.mjs'
@@ -36,10 +38,12 @@ const broadcast = (message) => {
 onLog((entry) => broadcast({ type: 'log', entry }))
 
 const configSnapshot = (configPath) => {
+  const file = resolveConfigPath(configPath)
   try {
     const config = loadConfig(configPath)
     return {
       ok: true,
+      file,
       baseUrl: config.baseUrl,
       workspace: config.workspace,
       users: config.users.map((user) => ({
@@ -50,8 +54,56 @@ const configSnapshot = (configPath) => {
       })),
     }
   } catch (error) {
-    return { ok: false, error: error.message }
+    return { ok: false, file, error: error.message }
   }
+}
+
+// First run in a fresh home (e.g. the .app bundle): give the user a config
+// file to edit instead of an error about a missing one.
+const scaffoldConfig = (configPath) => {
+  const file = resolveConfigPath(configPath)
+  if (existsSync(file)) return
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    copyFileSync(join(projectRoot, 'users.example.yaml'), file)
+    log.info(`created ${file} — fill in real staging accounts`)
+  } catch (error) {
+    log.warn(`could not scaffold config: ${error.message}`)
+  }
+}
+
+// The .app has no npm; download Chromium through playwright's CLI with our own
+// runtime when the machine has no usable browser. Non-blocking — progress
+// streams into the dashboard activity log.
+let browserInstall = null
+const ensureBrowser = () => {
+  if (systemChromePath() || bundledChromiumPath() || browserInstall) return
+  let cliPath
+  try {
+    cliPath = createRequire(import.meta.url).resolve('playwright/cli.js')
+  } catch {
+    log.warn('no browser found and playwright CLI unavailable — install Google Chrome')
+    return
+  }
+  log.warn('no browser found — downloading Chromium (one-time, ~150 MB)…')
+  browserInstall = spawn(process.execPath, [cliPath, 'install', 'chromium'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const relay = (stream) =>
+    stream.on('data', (chunk) => {
+      const text = String(chunk).trim()
+      if (text) log.info(`[chromium download] ${text.split('\n').pop()}`)
+    })
+  relay(browserInstall.stdout)
+  relay(browserInstall.stderr)
+  browserInstall.on('exit', (code) => {
+    log[code === 0 ? 'info' : 'warn'](
+      code === 0
+        ? 'Chromium ready'
+        : 'Chromium download failed — install Google Chrome and relaunch',
+    )
+    browserInstall = null
+  })
 }
 
 const stateSnapshot = async (configPath, { withVerify = false } = {}) => {
@@ -289,6 +341,26 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
         json(response, 200, { ok: true })
         return
       }
+      if (request.method === 'POST' && url.pathname === '/api/quit') {
+        json(response, 200, { ok: true })
+        log.info('quit requested from dashboard')
+        stopSession(configPath)
+          .catch(() => {})
+          .finally(() => process.exit(0))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/reveal-config') {
+        const file = resolveConfigPath(configPath)
+        const reveal =
+          process.platform === 'darwin'
+            ? ['open', ['-R', file]]
+            : process.platform === 'win32'
+              ? ['explorer', [`/select,${file}`]]
+              : ['xdg-open', [dirname(file)]]
+        execFile(reveal[0], reveal[1], () => {})
+        json(response, 200, { ok: true, file })
+        return
+      }
       if (request.method === 'POST' && url.pathname === '/api/action') {
         const body = await readBody(request)
         const results = await runAction(body.slug, body.action)
@@ -312,12 +384,23 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
     )
   }, SNAPSHOT_MS).unref()
 
+  scaffoldConfig(configPath)
   await new Promise((resolve, reject) => {
-    server.once('error', reject)
+    server.once('error', (error) => {
+      reject(
+        error.code === 'EADDRINUSE'
+          ? new Error(
+              `port ${port} is busy — the dashboard is probably already running at ` +
+                `http://127.0.0.1:${port} (or pass --port for another one)`,
+            )
+          : error,
+      )
+    })
     server.listen(port, '127.0.0.1', resolve)
   })
   const address = `http://127.0.0.1:${port}`
   log.info(`dashboard ready at ${address}`)
+  ensureBrowser()
   if (open) {
     const opener =
       process.platform === 'darwin'

@@ -5,10 +5,18 @@ import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
 
 export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-export const dataDir = join(projectRoot, '.data')
-export const fixturesDir = join(projectRoot, 'fixtures')
+// The .app bundle (and anyone else) can point all writable state somewhere
+// user-owned; without the env var everything stays inside the repo as before.
+export const baseDir = process.env.CALLS_SIM_HOME
+  ? resolve(process.env.CALLS_SIM_HOME)
+  : projectRoot
+export const dataDir = join(baseDir, '.data')
+export const fixturesDir = join(baseDir, 'fixtures')
 export const stateDir = join(dataDir, 'state')
 export const runsDir = join(dataDir, 'runs')
+
+export const resolveConfigPath = (configPath) =>
+  resolve(configPath ?? join(baseDir, 'users.yaml'))
 
 export const ensureDirs = () => {
   for (const dir of [dataDir, fixturesDir, stateDir, runsDir]) {
@@ -25,7 +33,7 @@ const slugify = (label) => {
 // Loads and validates users.yaml. Fails with readable messages — this file is
 // hand-maintained.
 export const loadConfig = (configPath) => {
-  const file = resolve(configPath ?? join(projectRoot, 'users.yaml'))
+  const file = resolveConfigPath(configPath)
   if (!existsSync(file)) {
     throw new Error(
       `Config not found: ${file}\n` +

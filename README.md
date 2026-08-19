@@ -9,6 +9,25 @@ only differences are the shared IP address and shared CPU.
 
 Fully deterministic: fixed selectors, explicit waits, no AI anywhere.
 
+## macOS app (zero-terminal option)
+
+`npm run build:app` produces `dist/Aloqa Calls Sim.app` (plus a shareable
+zip) with a bundled Node runtime — double-click and the dashboard opens; no
+Node, npm, or terminal needed on the target Mac. Notes:
+
+- Config and state live in `~/Library/Application Support/AloqaCallsSim/`;
+  the first launch creates `users.yaml` there (the dashboard's "Reveal file"
+  button opens it in Finder).
+- Quit from the dashboard's **Quit** button (the app has no Dock icon).
+  Re-opening the app while it runs just reopens the dashboard tab.
+- If the machine has no Chrome, the app downloads Chromium automatically on
+  first launch (progress shows in the activity log).
+- The app is ad-hoc signed: when the **zip** is downloaded on another Mac,
+  first launch needs right-click → Open (Gatekeeper), or
+  `xattr -dr com.apple.quarantine "/Applications/Aloqa Calls Sim.app"`.
+- The build is per-architecture (Apple Silicon vs Intel) — build on the kind
+  of Mac you're targeting.
+
 ## Install (any computer)
 
 The only hard requirement is **Node.js 20+**. macOS, Windows, and Linux all

@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/cli.mjs ui",
     "setup": "node scripts/setup.mjs",
+    "build:app": "node scripts/build-macos-app.mjs",
     "doctor": "node src/cli.mjs doctor",
     "clean": "node src/cli.mjs clean",
     "postinstall": "node scripts/postinstall.mjs"

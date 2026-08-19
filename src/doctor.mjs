@@ -1,8 +1,7 @@
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 
 import { bundledChromiumPath, systemChromePath } from './browser.mjs'
-import { loadConfig, projectRoot } from './config.mjs'
+import { loadConfig, resolveConfigPath } from './config.mjs'
 import { detectTtsEngine } from './tts.mjs'
 
 const ok = (label, detail) => ({ ok: true, label, detail })
@@ -33,7 +32,7 @@ export const collectChecks = async (configPath) => {
   )
 
   let config = null
-  const configFile = configPath ?? join(projectRoot, 'users.yaml')
+  const configFile = resolveConfigPath(configPath)
   if (!existsSync(configFile)) {
     checks.push(bad('config', `${configFile} missing — copy users.example.yaml to users.yaml and fill in accounts`))
   } else {

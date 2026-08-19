@@ -254,6 +254,7 @@
     <button id="openCall" title="Open call in your browser">↗</button>
   </span>
   <button id="stopBtn" class="btn -danger" hidden>Stop session</button>
+  <button id="quitBtn" class="btn" title="Stop everything and shut the server down">Quit</button>
 </header>
 
 <main>
@@ -293,6 +294,13 @@
         </div>
 
         <button id="launchBtn" class="btn -accent" style="width:100%;height:42px;font-size:14px">Launch session</button>
+      </div>
+
+      <div class="hint" style="display:flex;align-items:center;gap:8px;margin-top:18px">
+        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          Accounts config: <span id="cfgPath" style="font-family:ui-monospace,Menlo,monospace"></span>
+        </span>
+        <button id="revealCfg" class="btn" style="height:26px;padding:0 10px;font-size:11.5px;flex:none">Reveal file</button>
       </div>
     </div>
   </section>
@@ -451,6 +459,28 @@ $('#launchBtn').onclick = async () => {
     $('#launchBtn').disabled = false
   }
 }
+
+/* ---------- quit server (two-step confirm) ---------- */
+let quitArmed = null
+$('#quitBtn').onclick = async () => {
+  const btn = $('#quitBtn')
+  if (!quitArmed) {
+    btn.textContent = 'Confirm quit?'
+    btn.classList.add('-danger')
+    quitArmed = setTimeout(() => { quitArmed = null; btn.textContent = 'Quit'; btn.classList.remove('-danger') }, 3000)
+    return
+  }
+  clearTimeout(quitArmed); quitArmed = null
+  btn.disabled = true
+  btn.textContent = 'Shutting down…'
+  await post('/api/quit').catch(() => {})
+  document.body.innerHTML =
+    '<div style="display:grid;place-items:center;height:100vh;color:#8b93a7;font-size:15px">' +
+    'Server stopped — you can close this tab.</div>'
+}
+
+/* ---------- reveal config ---------- */
+$('#revealCfg').onclick = () => post('/api/reveal-config').catch((error) => toast(error.message, '-err'))
 
 /* ---------- stop (two-step confirm) ---------- */
 let stopArmed = null
@@ -620,6 +650,7 @@ const render = (state) => {
 
   // launch panel
   if (!active) {
+    if (state.config?.file) $('#cfgPath').textContent = state.config.file
     if (state.config?.ok) {
       $('#cfgError').hidden = true
       $('#launchForm').style.display = ''
