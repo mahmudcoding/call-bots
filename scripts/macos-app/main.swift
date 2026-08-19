@@ -1,10 +1,10 @@
-// Native macOS shell for the calls-sim dashboard: starts the bundled Node
+// Native macOS shell for Call Bots: starts the bundled Node
 // server and presents the UI in its own WKWebView window. Compiled by
 // scripts/build-macos-app.mjs with `swiftc -swift-version 5`.
 import Cocoa
 import WebKit
 
-let port = ProcessInfo.processInfo.environment["CALLS_SIM_PORT"] ?? "4610"
+let port = ProcessInfo.processInfo.environment["CALL_BOTS_PORT"] ?? "4610"
 let baseURL = URL(string: "http://127.0.0.1:\(port)")!
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
@@ -111,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     let node = resources.appendingPathComponent("node/bin/node")
     let cli = resources.appendingPathComponent("app/src/cli.mjs")
     let home = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Application Support/AloqaCallsSim")
+      .appendingPathComponent("Library/Application Support/CallBots")
     try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
 
     let logURL = home.appendingPathComponent("server.log")
@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     process.executableURL = node
     process.arguments = [cli.path, "ui", "--port", port, "--no-open"]
     var env = ProcessInfo.processInfo.environment
-    env["CALLS_SIM_HOME"] = home.path
+    env["CALL_BOTS_HOME"] = home.path
     process.environment = env
     if let logHandle {
       process.standardOutput = logHandle
@@ -166,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
           }
         } else {
           self.showStatus(
-            "Server did not start — see ~/Library/Application Support/AloqaCallsSim/server.log")
+            "Server did not start — see ~/Library/Application Support/CallBots/server.log")
         }
       }
     }

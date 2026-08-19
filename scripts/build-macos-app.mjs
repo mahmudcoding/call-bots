@@ -81,7 +81,6 @@ run('swiftc', [
 step('copying app payload')
 cpSync(join(projectRoot, 'src'), join(resources, 'app', 'src'), { recursive: true })
 cpSync(join(projectRoot, 'package.json'), join(resources, 'app', 'package.json'))
-cpSync(join(projectRoot, 'users.example.yaml'), join(resources, 'app', 'users.example.yaml'))
 cpSync(join(projectRoot, 'node_modules'), join(resources, 'app', 'node_modules'), {
   recursive: true,
   filter: (source) => !source.includes(`node_modules${'/'}.bin`),

@@ -1,15 +1,14 @@
 {
-  "name": "aloqa-calls-sim",
+  "name": "call-bots",
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Simulate N real users in an Aloqa staging call — real WebRTC audio/video from synthetic capture devices",
+  "description": "Put any number of guests into an Aloqa call — real WebRTC audio and video from synthetic capture devices",
   "bin": {
-    "calls-sim": "./src/cli.mjs"
+    "call-bots": "./src/cli.mjs"
   },
   "scripts": {
     "start": "node src/cli.mjs ui",
-    "setup": "node scripts/setup.mjs",
     "build:app": "node scripts/build-macos-app.mjs",
     "doctor": "node src/cli.mjs doctor",
     "clean": "node src/cli.mjs clean",
@@ -19,8 +18,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "pg": "^8.23.0",
-    "playwright": "~1.59.0",
-    "yaml": "^2.6.0"
+    "playwright": "~1.59.0"
   }
 }

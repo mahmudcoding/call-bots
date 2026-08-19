@@ -1,22 +1,15 @@
 import { execFile, spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import http from 'node:http'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { bundledChromiumPath, systemChromePath } from './browser.mjs'
-import { loadConfig, projectRoot, resolveConfigPath, updateConfigWorkspace } from './config.mjs'
-import { userColorHex } from './fixtures.mjs'
 import { onLog, plain as log } from './log.mjs'
 import { machineProfile } from './machine.mjs'
 import { Roster } from './orchestrator.mjs'
-import { classifyTarget } from './selectors.mjs'
-import {
-  discoverJoinedWorkspace,
-  extractInviteToken,
-  joinUsersToWorkspace,
-} from './workspace.mjs'
+import { parseInviteLink } from './selectors.mjs'
 
 const UI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'ui.html')
 
@@ -24,22 +17,13 @@ const THUMB_TTL_MS = 1500
 const SNAPSHOT_MS = 2000
 const VERIFY_EVERY = 3 // every Nth snapshot includes the deep check
 
-// One dashboard controls one session at a time.
+// One dashboard drives one call at a time.
 const session = {
-  status: 'idle', // idle | launching | running | stopping
+  status: 'idle', // idle | joining | running | stopping
   roster: null,
   verify: null,
   startedAt: null,
-  lastRunError: null,
-}
-
-// Workspace-join job state (independent of call sessions).
-const joinJob = {
-  running: false,
-  done: 0,
-  total: 0,
-  summary: null, // {joined, already, failed, workspace}
-  error: null,
+  lastError: null,
 }
 
 const sseClients = new Set()
@@ -52,45 +36,8 @@ const broadcast = (message) => {
 
 onLog((entry) => broadcast({ type: 'log', entry }))
 
-const configSnapshot = (configPath) => {
-  const file = resolveConfigPath(configPath)
-  try {
-    const config = loadConfig(configPath)
-    return {
-      ok: true,
-      file,
-      baseUrl: config.baseUrl,
-      workspace: config.workspace,
-      workspaceName: config.workspaceName,
-      users: config.users.map((user) => ({
-        slug: user.slug,
-        label: user.label,
-        email: user.email,
-        color: userColorHex(user.index),
-      })),
-    }
-  } catch (error) {
-    return { ok: false, file, error: error.message }
-  }
-}
-
-// First run in a fresh home (e.g. the .app bundle): give the user a config
-// file to edit instead of an error about a missing one.
-const scaffoldConfig = (configPath) => {
-  const file = resolveConfigPath(configPath)
-  if (existsSync(file)) return
-  try {
-    mkdirSync(dirname(file), { recursive: true })
-    copyFileSync(join(projectRoot, 'users.example.yaml'), file)
-    log.info(`created ${file} — fill in real staging accounts`)
-  } catch (error) {
-    log.warn(`could not scaffold config: ${error.message}`)
-  }
-}
-
 // The .app has no npm; download Chromium through playwright's CLI with our own
-// runtime when the machine has no usable browser. Non-blocking — progress
-// streams into the dashboard activity log.
+// runtime when the machine has no usable browser.
 let browserInstall = null
 const ensureBrowser = () => {
   if (systemChromePath() || bundledChromiumPath() || browserInstall) return
@@ -108,21 +55,19 @@ const ensureBrowser = () => {
   const relay = (stream) =>
     stream.on('data', (chunk) => {
       const text = String(chunk).trim()
-      if (text) log.info(`[chromium download] ${text.split('\n').pop()}`)
+      if (text) log.info(`[chromium] ${text.split('\n').pop()}`)
     })
   relay(browserInstall.stdout)
   relay(browserInstall.stderr)
   browserInstall.on('exit', (code) => {
     log[code === 0 ? 'info' : 'warn'](
-      code === 0
-        ? 'Chromium ready'
-        : 'Chromium download failed — install Google Chrome and relaunch',
+      code === 0 ? 'Chromium ready' : 'Chromium download failed — install Google Chrome',
     )
     browserInstall = null
   })
 }
 
-const stateSnapshot = async (configPath, { withVerify = false } = {}) => {
+const stateSnapshot = async ({ withVerify = false } = {}) => {
   const roster = session.roster
   let rosterState = null
   if (roster) {
@@ -136,80 +81,12 @@ const stateSnapshot = async (configPath, { withVerify = false } = {}) => {
     state: {
       status: session.status,
       startedAt: session.startedAt,
-      lastRunError: session.lastRunError,
-      config: configSnapshot(configPath),
+      lastError: session.lastError,
       machine: machineProfile(),
       session: rosterState,
       verify: session.verify,
-      join: { ...joinJob },
     },
   }
-}
-
-// Logs every fleet user into the product and accepts the invite. HTTP only —
-// no browsers — so 100 users cost seconds, not gigabytes.
-const runJoinWorkspace = async (configPath, body) => {
-  if (joinJob.running) throw new Error('a workspace join is already running')
-  const config = loadConfig(configPath)
-  const token = extractInviteToken(body.invite)
-  const selected =
-    Array.isArray(body.users) && body.users.length > 0
-      ? config.users.filter((user) => body.users.includes(user.slug))
-      : config.users
-  if (selected.length === 0) throw new Error('no users selected')
-
-  const apiBase = `${config.baseUrl}/stg/api/v1`
-  joinJob.running = true
-  joinJob.done = 0
-  joinJob.total = selected.length
-  joinJob.summary = null
-  joinJob.error = null
-  log.info(`joining ${selected.length} user(s) to a workspace (token …${token.slice(-6)})`)
-
-  ;(async () => {
-    try {
-      const results = await joinUsersToWorkspace({
-        apiBase,
-        users: selected,
-        token,
-        onProgress: (done, total, outcome) => {
-          joinJob.done = done
-          if (!outcome.ok) log.warn(`  ${outcome.label}: ${outcome.state} (${outcome.detail})`)
-          if (done === 1 || done % 10 === 0 || done === total) {
-            log.info(`  joined ${done}/${total}…`)
-          }
-        },
-      })
-      const joined = results.filter((r) => r.state === 'joined').length
-      const already = results.filter((r) => r.state === 'already_member').length
-      const failed = results.filter((r) => !r.ok)
-      log.info(
-        `workspace join finished: ${joined} joined, ${already} already members, ${failed.length} failed`,
-      )
-
-      let workspace = null
-      const anySession = results.find((r) => r.ok && r.session)?.session
-      if (anySession) {
-        workspace = await discoverJoinedWorkspace(anySession).catch(() => null)
-        if (workspace) {
-          const file = updateConfigWorkspace(configPath, workspace.id, workspace.name)
-          log.info(
-            `workspace set to ${workspace.name || workspace.id} (${workspace.id})` +
-              (file ? ` in ${file}` : ''),
-          )
-        } else {
-          log.warn('joined, but could not read the workspace id — set it manually if needed')
-        }
-      }
-      joinJob.summary = { joined, already, failed: failed.length, workspace }
-    } catch (error) {
-      joinJob.error = error.message
-      log.error(`workspace join failed: ${error.message}`)
-    } finally {
-      joinJob.running = false
-      broadcast(await stateSnapshot(configPath))
-    }
-  })()
 }
 
 const readBody = (request) =>
@@ -236,111 +113,91 @@ const json = (response, status, body) => {
   response.end(JSON.stringify(body))
 }
 
-const launchSession = async (configPath, body) => {
+// Send the first guests in. The invite link carries both the origin and the
+// token, so there is nothing else to configure.
+const startSession = async (body) => {
   if (session.status !== 'idle') throw new Error(`a session is already ${session.status}`)
-  const config = loadConfig(configPath)
-  const selected = (body.users ?? []).map((slug) => {
-    const user = config.users.find((entry) => entry.slug === slug)
-    if (!user) throw new Error(`unknown user "${slug}"`)
-    return user
-  })
-  if (selected.length === 0) throw new Error('select at least one user')
-  const users = selected.map((user, index) => ({ ...user, index }))
+  const { origin, token } = parseInviteLink(body.link ?? '')
+  const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
 
-  const options = {
+  const roster = new Roster({
+    baseUrl: origin,
     headed: false,
-    browser: body.browser === 'chromium' ? 'chromium' : 'chrome',
-    noVideo: false,
-    noAudio: false,
+    browser: 'auto',
+    noVideo: Boolean(body.noVideo),
+    noAudio: Boolean(body.noAudio),
     size: '1920x1080',
     fps: 12,
-    regen: false,
-  }
-
-  const target = classifyTarget(body.link ?? body.callUrl ?? '', config.baseUrl)
-  const guestCount = Math.max(0, Math.min(50, Number(body.guests) || 0))
-
-  const roster = new Roster(config, options)
+  })
   session.roster = roster
-  session.status = 'launching'
+  session.status = 'joining'
   session.startedAt = Date.now()
-  session.lastRunError = null
+  session.lastError = null
   session.verify = null
   thumbCache.clear()
 
-  // run in the background; SSE snapshots keep the dashboard current
   ;(async () => {
     try {
-      await roster.joinByLink(users, target)
-      session.status = 'running'
-      if (guestCount > 0) {
-        // guests are additive: a guest failure must not tear down a live roster
-        try {
-          const result = await roster.addGuests(guestCount)
-          log.info(`guests in call: ${result.added}${result.failed ? `, failed ${result.failed}` : ''}`)
-        } catch (error) {
-          log.error(`guests: ${error.message}`)
-        }
+      const result = await roster.add(count, token)
+      session.status = roster.inCall().length > 0 ? 'running' : 'idle'
+      if (roster.inCall().length === 0) {
+        session.lastError = 'no guest reached the call'
+        await roster.teardownAll().catch(() => {})
+        session.roster = null
+      } else if (result.failed) {
+        log.warn(`${result.failed} guest(s) failed to join`)
       }
     } catch (error) {
-      log.error(`launch failed: ${error.message}`)
-      session.lastRunError = error.message
+      log.error(error.message)
+      session.lastError = error.message
       await roster.teardownAll().catch(() => {})
       session.status = 'idle'
       session.roster = null
     }
-    broadcast(await stateSnapshot(configPath, { withVerify: true }))
+    broadcast(await stateSnapshot({ withVerify: true }))
   })()
 }
 
-const stopSession = async (configPath) => {
+const stopSession = async () => {
   if (!session.roster || session.status === 'stopping') return
   session.status = 'stopping'
-  broadcast(await stateSnapshot(configPath))
+  broadcast(await stateSnapshot())
   await session.roster.teardownAll().catch((error) => log.warn(error.message))
   session.roster = null
   session.verify = null
   session.status = 'idle'
-  broadcast(await stateSnapshot(configPath))
+  broadcast(await stateSnapshot())
 }
 
 const runAction = async (slug, action) => {
   const roster = session.roster
   if (!roster || session.status !== 'running') throw new Error('no running session')
   const targets = slug === 'all' ? roster.inCall() : [roster.bySlug(slug)].filter(Boolean)
-  if (targets.length === 0) throw new Error(`no user for "${slug}"`)
+  if (targets.length === 0) throw new Error(`no guest for "${slug}"`)
   const results = {}
-  for (const sim of targets) {
+  for (const guest of targets) {
     switch (action) {
       case 'mute':
-        results[sim.label] = await sim.setMic(false)
+        results[guest.label] = await guest.setMic(false)
         break
       case 'unmute':
-        results[sim.label] = await sim.setMic(true)
+        results[guest.label] = await guest.setMic(true)
         break
       case 'cam-on':
-        results[sim.label] = await sim.setCam(true)
+        results[guest.label] = await guest.setCam(true)
         break
       case 'cam-off':
-        results[sim.label] = await sim.setCam(false)
+        results[guest.label] = await guest.setCam(false)
         break
       case 'share':
-        results[sim.label] = await sim.setShare(true)
+        results[guest.label] = await guest.setShare(true)
         break
       case 'share-stop':
-        results[sim.label] = await sim.setShare(false)
+        results[guest.label] = await guest.setShare(false)
         break
       case 'leave':
-        await sim.leaveCall()
-        results[sim.label] = sim.state
-        break
-      case 'rejoin':
-        await sim.ensureLoggedIn(`/w/${roster.wsId}/call/${roster.callId}`)
-        await sim.joinCall(roster.wsId, roster.callId)
-        results[sim.label] = sim.state
-        break
-      case 'shot':
-        results[sim.label] = await sim.shot()
+        await guest.teardown()
+        results[guest.label] = guest.state
         break
       default:
         throw new Error(`unknown action "${action}"`)
@@ -350,15 +207,14 @@ const runAction = async (slug, action) => {
 }
 
 const thumbnail = async (slug) => {
-  const roster = session.roster
-  const sim = roster?.bySlug(slug)
-  if (!sim?.page || sim.state === 'closed') return null
+  const guest = session.roster?.bySlug(slug)
+  if (!guest?.page || guest.state === 'closed') return null
   const cached = thumbCache.get(slug)
   const now = Date.now()
   if (cached?.buffer && now - cached.at < THUMB_TTL_MS) return cached.buffer
   if (cached?.inFlight) return cached.inFlight
   const inFlight = Promise.race([
-    sim.page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 }),
+    guest.page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 }),
     new Promise((resolve) => setTimeout(() => resolve(null), 4500)),
   ])
     .then((buffer) => {
@@ -373,8 +229,8 @@ const thumbnail = async (slug) => {
   return inFlight
 }
 
-export const startServer = async ({ port = 4610, configPath = null, open = true }) => {
-  let snapshotCount = 0
+export const startServer = async ({ port = 4610, open = true }) => {
+  let snapshots = 0
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`)
@@ -385,7 +241,7 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/state') {
-        json(response, 200, (await stateSnapshot(configPath, { withVerify: true })).state)
+        json(response, 200, (await stateSnapshot({ withVerify: true })).state)
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/events') {
@@ -397,14 +253,11 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
         response.write('retry: 1500\n\n')
         sseClients.add(response)
         request.on('close', () => sseClients.delete(response))
-        response.write(
-          `data: ${JSON.stringify(await stateSnapshot(configPath, { withVerify: true }))}\n\n`,
-        )
+        response.write(`data: ${JSON.stringify(await stateSnapshot({ withVerify: true }))}\n\n`)
         return
       }
       if (request.method === 'GET' && url.pathname.startsWith('/api/thumb/')) {
-        const slug = decodeURIComponent(url.pathname.split('/').pop())
-        const buffer = await thumbnail(slug)
+        const buffer = await thumbnail(decodeURIComponent(url.pathname.split('/').pop()))
         if (!buffer) {
           response.writeHead(204)
           response.end()
@@ -414,46 +267,41 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
         response.end(buffer)
         return
       }
-      if (request.method === 'POST' && url.pathname === '/api/launch') {
-        await launchSession(configPath, await readBody(request))
+      if (request.method === 'POST' && url.pathname === '/api/start') {
+        await startSession(await readBody(request))
         json(response, 200, { ok: true })
+        broadcast(await stateSnapshot())
         return
       }
-      if (request.method === 'POST' && url.pathname === '/api/stop') {
-        stopSession(configPath)
-        json(response, 200, { ok: true })
-        return
-      }
-      if (request.method === 'POST' && url.pathname === '/api/guests') {
+      if (request.method === 'POST' && url.pathname === '/api/add') {
         const body = await readBody(request)
         if (!session.roster || session.status !== 'running') {
-          throw new Error('start a session before adding guests')
+          throw new Error('start a session first')
         }
-        const count = Math.max(1, Math.min(50, Number(body.count) || 1))
-        const result = await session.roster.addGuests(count, body.link ?? null)
-        broadcast(await stateSnapshot(configPath))
+        const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
+        const result = await session.roster.add(count)
+        broadcast(await stateSnapshot())
         json(response, 200, { ok: true, ...result })
-        return
-      }
-      if (request.method === 'POST' && url.pathname === '/api/join-workspace') {
-        await runJoinWorkspace(configPath, await readBody(request))
-        json(response, 200, { ok: true })
-        broadcast(await stateSnapshot(configPath))
-        return
-      }
-      if (request.method === 'POST' && url.pathname === '/api/quit') {
-        json(response, 200, { ok: true })
-        log.info('quit requested from dashboard')
-        stopSession(configPath)
-          .catch(() => {})
-          .finally(() => process.exit(0))
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/action') {
         const body = await readBody(request)
         const results = await runAction(body.slug, body.action)
-        broadcast(await stateSnapshot(configPath))
+        broadcast(await stateSnapshot())
         json(response, 200, { ok: true, results })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/stop') {
+        stopSession()
+        json(response, 200, { ok: true })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/quit') {
+        json(response, 200, { ok: true })
+        log.info('quit requested')
+        stopSession()
+          .catch(() => {})
+          .finally(() => process.exit(0))
         return
       }
       json(response, 404, { ok: false, error: 'not found' })
@@ -462,32 +310,24 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
     }
   })
 
-  // Push a fresh snapshot to connected dashboards; every Nth includes the
-  // deep verifier pass (remote tiles + server participant count).
   setInterval(async () => {
     if (sseClients.size === 0) return
-    snapshotCount += 1
-    broadcast(
-      await stateSnapshot(configPath, { withVerify: snapshotCount % VERIFY_EVERY === 0 }),
-    )
+    snapshots += 1
+    broadcast(await stateSnapshot({ withVerify: snapshots % VERIFY_EVERY === 0 }))
   }, SNAPSHOT_MS).unref()
 
-  scaffoldConfig(configPath)
   await new Promise((resolve, reject) => {
     server.once('error', (error) => {
       reject(
         error.code === 'EADDRINUSE'
-          ? new Error(
-              `port ${port} is busy — the dashboard is probably already running at ` +
-                `http://127.0.0.1:${port} (or pass --port for another one)`,
-            )
+          ? new Error(`port ${port} is busy — Call Bots may already be running`)
           : error,
       )
     })
     server.listen(port, '127.0.0.1', resolve)
   })
   const address = `http://127.0.0.1:${port}`
-  log.info(`dashboard ready at ${address}`)
+  log.info(`ready at ${address}`)
   ensureBrowser()
   if (open) {
     const opener =
@@ -501,11 +341,10 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
 
   const shutdown = async () => {
     log.info('shutting down…')
-    await stopSession(configPath).catch(() => {})
+    await stopSession().catch(() => {})
     process.exit(0)
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
-
   return server
 }
