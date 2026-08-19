@@ -12,16 +12,22 @@ Fully deterministic: fixed selectors, explicit waits, no AI anywhere.
 ## macOS app (zero-terminal option)
 
 `npm run build:app` produces `dist/Aloqa Calls Sim.app` (plus a shareable
-zip) with a bundled Node runtime — double-click and the dashboard opens; no
-Node, npm, or terminal needed on the target Mac. Notes:
+zip): a real windowed Mac app — native WKWebView shell around the dashboard
+with a bundled Node runtime. No Node, npm, terminal, or browser tab needed on
+the target Mac. Notes:
 
+- The app owns the server: launching opens the window, quitting (⌘Q or the
+  dashboard's Quit button) leaves any call and shuts everything down. If a
+  dashboard server is already running (e.g. `npm start`), the app attaches to
+  it instead of starting a second one.
 - Config and state live in `~/Library/Application Support/AloqaCallsSim/`;
   the first launch creates `users.yaml` there (the dashboard's "Reveal file"
-  button opens it in Finder).
-- Quit from the dashboard's **Quit** button (the app has no Dock icon).
-  Re-opening the app while it runs just reopens the dashboard tab.
+  button opens it in Finder). Logs: `server.log` in the same folder.
+- Links that leave the dashboard (e.g. "Open call") open in your default
+  browser, so you join the call as yourself.
 - If the machine has no Chrome, the app downloads Chromium automatically on
   first launch (progress shows in the activity log).
+- Building needs Xcode Command Line Tools (`swiftc`).
 - The app is ad-hoc signed: when the **zip** is downloaded on another Mac,
   first launch needs right-click → Open (Gatekeeper), or
   `xattr -dr com.apple.quarantine "/Applications/Aloqa Calls Sim.app"`.

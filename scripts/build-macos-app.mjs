@@ -51,37 +51,31 @@ writeFileSync(
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
   <key>CFBundleVersion</key><string>${version}</string>
   <key>CFBundleShortVersionString</key><string>${version}</string>
-  <key>CFBundleExecutable</key><string>launcher</string>
+  <key>CFBundleExecutable</key><string>AloqaCallsSim</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
-  <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
 `,
 )
 
-// LSUIElement: no Dock icon — the dashboard's Quit button is the way out, and
-// relaunching the app while the server runs just reopens the browser tab.
-writeFileSync(
-  join(contents, 'MacOS', 'launcher'),
-  `#!/bin/bash
-set -euo pipefail
-CONTENTS="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$CONTENTS/Resources/app"
-NODE="$CONTENTS/Resources/node/bin/node"
-export CALLS_SIM_HOME="$HOME/Library/Application Support/AloqaCallsSim"
-mkdir -p "$CALLS_SIM_HOME"
-PORT="\${CALLS_SIM_PORT:-4610}"
-if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/api/state"; then
-  open "http://127.0.0.1:$PORT"
-  exit 0
-fi
-exec "$NODE" "$APP/src/cli.mjs" ui --port "$PORT" >>"$CALLS_SIM_HOME/server.log" 2>&1
-`,
-)
-chmodSync(join(contents, 'MacOS', 'launcher'), 0o755)
+// Native shell: WKWebView window that owns the bundled server's lifetime.
+step('compiling native shell (swiftc)')
+try {
+  execFileSync('swiftc', ['--version'], { stdio: 'pipe' })
+} catch {
+  console.error('swiftc not found — install Xcode Command Line Tools: xcode-select --install')
+  process.exit(1)
+}
+run('swiftc', [
+  '-O',
+  '-swift-version', '5',
+  '-target', `${arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos12.0`,
+  '-o', join(contents, 'MacOS', 'AloqaCallsSim'),
+  join(projectRoot, 'scripts', 'macos-app', 'main.swift'),
+])
 
 // --- 3. app payload ----------------------------------------------------------
 step('copying app payload')
