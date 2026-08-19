@@ -8,7 +8,6 @@ import { chromium } from 'playwright'
 
 import { resolveLink } from '../src/platforms/index.mjs'
 import aloqa from '../src/platforms/aloqa.mjs'
-import meet from '../src/platforms/meet.mjs'
 
 const results = []
 const check = (name, pass, detail = '') => {
@@ -55,40 +54,6 @@ const ALOQA_CALL = `<!doctype html><meta charset=utf-8><body>
     document.querySelector('[data-testid="call-controls-leave"]')
       .addEventListener('click', () => { document.getElementById('confirm').hidden = false })
     ${PLAYING_VIDEO}
-  </script></body>`
-
-const MEET_PAGE = `<!doctype html><meta charset=utf-8><body>
-  <div id="green">
-    <input aria-label="Your name">
-    <button id="ask">Ask to join</button>
-  </div>
-  <div id="lobby" hidden>Asking to be let in</div>
-  <div id="call" hidden>
-    <button aria-label="Leave call">leave</button>
-    <button data-is-muted="true" aria-label="Turn on microphone"></button>
-    <button data-is-muted="true" aria-label="Turn on camera"></button>
-    <div data-participant-id="self" data-self-name="Bot 1"></div>
-    <div data-participant-id="p2" data-sort-key="Alice_1"><video playsinline></video></div>
-  </div>
-  <script>
-    document.getElementById('ask').addEventListener('click', () => {
-      document.getElementById('green').hidden = true
-      document.getElementById('lobby').hidden = false
-      // the host admits after a beat, the way a person would
-      setTimeout(() => {
-        document.getElementById('lobby').hidden = true
-        document.getElementById('call').hidden = false
-        ${PLAYING_VIDEO}
-      }, 700)
-    })
-    for (const b of document.querySelectorAll('[data-is-muted]')) {
-      b.addEventListener('click', () => {
-        const muted = b.getAttribute('data-is-muted') === 'true'
-        b.setAttribute('data-is-muted', muted ? 'false' : 'true')
-        b.setAttribute('aria-label', (muted ? 'Turn off ' : 'Turn on ') +
-          (b.getAttribute('aria-label').includes('microphone') ? 'microphone' : 'camera'))
-      })
-    }
   </script></body>`
 
 const log = { info: () => {}, warn: () => {}, error: () => {} }
@@ -144,14 +109,6 @@ await drive(browser, {
   routes: (path) => (path.startsWith('/guest/meeting/') ? ALOQA_CALL : ALOQA_ENTRY),
 })
 
-await drive(browser, {
-  title: 'Google Meet',
-  link: 'https://meet.google.com/abc-defg-hij',
-  adapter: meet,
-  expectCallId: 'abc-defg-hij',
-  routes: () => MEET_PAGE,
-})
-
 // --- refusals ---------------------------------------------------------------
 // The message a bot fails with is what the user acts on, so it is worth
 // pinning down too.
@@ -184,14 +141,6 @@ await expectFailure('Aloqa — join refused', {
   body: `<!doctype html><meta charset=utf-8><body>
     <div data-testid="guest-join-blocked">This invite link has expired</div></body>`,
   expect: /join refused: This invite link has expired/u,
-})
-
-await expectFailure('Meet — call will not admit guests', {
-  link: 'https://meet.google.com/abc-defg-hij',
-  adapter: meet,
-  body: `<!doctype html><meta charset=utf-8><body>
-    <div>You can't join this video call</div></body>`,
-  expect: /can'?t join this video call — anonymous bots can only join/u,
 })
 
 await browser.close()

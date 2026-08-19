@@ -1,9 +1,10 @@
 import aloqa from './aloqa.mjs'
-import meet from './meet.mjs'
 
-// Order matters: Aloqa runs on any origin and matches by path shape, so it goes
-// last and acts as the catch-all. Platforms tied to one host come first.
-export const PLATFORMS = [meet, aloqa]
+// One file per platform, each owning its own selectors, join sequence, device
+// toggles and participant grid. Adding one means adding a file and listing it
+// here; a platform tied to a single host goes before Aloqa, which runs on any
+// origin and matches by the shape of the path.
+export const PLATFORMS = [aloqa]
 
 export const platformById = (id) => PLATFORMS.find((platform) => platform.id === id) ?? null
 
@@ -26,8 +27,5 @@ export const resolveLink = (input) => {
     const target = platform.parse(url)
     if (target) return { ...target, platform: platform.id, label: platform.label }
   }
-  throw new Error(
-    'that link is not one we recognise — paste a Google Meet link ' +
-      '(meet.google.com/abc-defg-hij) or an Aloqa call invite (…/join/<token>)',
-  )
+  throw new Error('expected a call invite link like …/join/<token>, got ' + url.pathname)
 }
