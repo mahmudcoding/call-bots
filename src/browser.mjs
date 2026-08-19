@@ -52,6 +52,9 @@ const resolveChannel = (preference) => {
   throw new Error('no browser yet — Chromium is still downloading, try again in a moment')
 }
 
+// Used by the clip renderer, which needs the same browser choice.
+export const launchChannel = () => resolveChannel('auto')
+
 // The marker arg lets `clean` find leftover processes after a hard kill.
 export const RUN_MARKER = '--call-bots-run'
 

@@ -1,5 +1,5 @@
 import { RUN_MARKER, createRunDir, writeManifest } from './browser.mjs'
-import { ensureGuestFixtures, guestColorHex } from './fixtures.mjs'
+import { THEME_COUNT, ensureGuestFixtures, guestColorHex } from './fixtures.mjs'
 import { Guest } from './guest.mjs'
 import { plain as log } from './log.mjs'
 import { concurrencyWarning } from './machine.mjs'
@@ -116,7 +116,7 @@ export class Roster {
         index: i,
         slug: guest.user.slug,
         label: guest.label,
-        color: guestColorHex(guest.user.n - 1),
+        color: guestColorHex((guest.user.n - 1) % THEME_COUNT),
         state: guest.state,
         mic: inCall ? await guest.micState().catch(() => 'unknown') : null,
         cam: inCall ? await guest.camState().catch(() => 'unknown') : null,

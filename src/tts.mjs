@@ -48,12 +48,20 @@ export const listVoices = async () => {
       .filter((line) => /\ben_/u.test(line))
       .map((line) => line.trim().split(/\s{2,}|\s(?=[a-z]{2}_)/u)[0].trim())
       .filter(Boolean)
-    // novelty voices are unintelligible; keep them out of the rotation
-    const novelty = new Set([
-      'Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles', 'Cellos', 'Good News',
-      'Jester', 'Organ', 'Superstar', 'Trinoids', 'Whisper', 'Wobble', 'Zarvox',
-    ])
-    cachedVoices = all.filter((v) => !novelty.has(v))
+    // Prefer the voices that actually sound like a person. Anything outside
+    // this list (Fred, Junior, Zarvox and friends) reads as a robot, which is
+    // the opposite of what a call full of bots should sound like.
+    const natural = [
+      'Samantha', 'Daniel', 'Karen', 'Moira', 'Tessa', 'Rishi', 'Tara', 'Aman',
+      'Sandy', 'Shelley', 'Reed', 'Flo', 'Eddy', 'Nicky', 'Aaron', 'Serena',
+    ]
+    const score = (voice) => {
+      const base = voice.replace(/\s*\(.*\)$/u, '')
+      const rank = natural.indexOf(base)
+      return rank === -1 ? Infinity : rank
+    }
+    const ranked = all.filter((voice) => score(voice) !== Infinity).sort((a, b) => score(a) - score(b))
+    cachedVoices = ranked.length ? ranked : all
   } catch {
     cachedVoices = []
   }

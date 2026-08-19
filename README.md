@@ -37,16 +37,20 @@ Terminal equivalent:
 node src/cli.mjs join "<invite-link>" --guests 4
 ```
 
-## What each guest publishes
+## What each bot publishes
 
-- **Video**: one shared 1920x1080 clip rendered in pure Node — aurora ribbons
-  behind a circular visualiser with a live timecode, so a frozen tile is
-  obvious. Rendered once and reused by every guest.
-- **Audio**: a looping 48 kHz track per guest, each with a different system
-  voice and line, offset so the active speaker rotates.
+- **Video**: bright, detailed 1920x1080 clips drawn in a real browser canvas, so
+  the text is properly anti-aliased and the gradients are smooth. Each one packs
+  saturated colour bars, a resolution star, fine gratings, a black-to-white ramp
+  and a moving subject — the things a codec sacrifices first — so when the
+  network degrades you can see it in the received picture immediately. There are
+  five themes and bots cycle through them, rendered on demand and cached.
+- **Audio**: continuous natural speech, a different system voice and a different
+  passage per bot, so a call sounds like a room of people rather than one clip
+  playing five times.
 
-Regenerate with `node src/cli.mjs fixtures --regen`; `--size`/`--fps` tune the
-video (1080p is heavy — try `--size 1280x720` for more guests at once).
+Rebuild the media with `node src/cli.mjs fixtures --regen`; `--size`/`--fps`
+tune the video (1080p is heavy — try `--size 1280x720` for more bots at once).
 
 ## Notes
 

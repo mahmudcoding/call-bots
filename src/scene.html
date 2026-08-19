@@ -1,0 +1,192 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; }
+</style>
+<canvas id="c"></canvas>
+<script>
+'use strict'
+// Five bright, detailed camera scenes. They are deliberately full of things
+// that compression destroys first — saturated colour, fine gratings, smooth
+// ramps, sharp edges and steady motion — so a viewer can see at a glance when
+// the received quality drops.
+const THEMES = [
+  { name: 'AURORA',  a: '#00e5ff', b: '#7c4dff', c: '#00ffa3', sky: ['#0b3d91', '#7b2ff7', '#00d4ff'] },
+  { name: 'SUNSET',  a: '#ff9a3c', b: '#ff2e63', c: '#ffd166', sky: ['#ff5f6d', '#ffc371', '#ff2e63'] },
+  { name: 'OCEAN',   a: '#00c6ff', b: '#0072ff', c: '#7ef9ff', sky: ['#0575e6', '#00f260', '#0099f7'] },
+  { name: 'MEADOW',  a: '#a8ff78', b: '#12c2e9', c: '#ffe259', sky: ['#11998e', '#38ef7d', '#c6ff00'] },
+  { name: 'EMBER',   a: '#ffb75e', b: '#ed4264', c: '#fff1a8', sky: ['#f12711', '#f5af19', '#ff512f'] },
+]
+
+const canvas = document.getElementById('c')
+const ctx = canvas.getContext('2d', { alpha: false })
+
+window.setup = (w, h) => {
+  canvas.width = w
+  canvas.height = h
+}
+
+const rr = (x, y, w, h, r) => {
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, r)
+}
+
+// t runs 0..1 across the loop
+window.drawFrame = (themeIndex, t) => {
+  const W = canvas.width
+  const H = canvas.height
+  const s = H / 1080
+  const T = t * Math.PI * 2
+  const theme = THEMES[themeIndex % THEMES.length]
+
+  // --- background: a bright moving mesh gradient -------------------------
+  const g = ctx.createLinearGradient(0, 0, W, H)
+  g.addColorStop(0, theme.sky[0])
+  g.addColorStop(0.5 + 0.2 * Math.sin(T), theme.sky[1])
+  g.addColorStop(1, theme.sky[2])
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, W, H)
+
+  // drifting light blobs keep the picture alive and expose banding
+  for (let i = 0; i < 5; i += 1) {
+    const cx = W * (0.2 + 0.6 * ((i * 0.37 + t * (0.3 + i * 0.1)) % 1))
+    const cy = H * (0.25 + 0.5 * Math.sin(T + i))
+    const r = (220 + i * 90) * s
+    const blob = ctx.createRadialGradient(cx, cy, 0, cx, cy, r)
+    blob.addColorStop(0, i % 2 ? theme.a : theme.c)
+    blob.addColorStop(1, 'transparent')
+    ctx.globalAlpha = 0.5
+    ctx.fillStyle = blob
+    ctx.fillRect(cx - r, cy - r, r * 2, r * 2)
+    ctx.globalAlpha = 1
+  }
+
+  // --- saturated colour bars: chroma loss shows here ----------------------
+  const barW = W / 8
+  const bars = ['#ffffff', '#ffff00', '#00ffff', '#00ff00', '#ff00ff', '#ff0000', '#0000ff', '#101010']
+  ctx.save()
+  rr(0, 0, W, 74 * s, 0)
+  ctx.clip()
+  bars.forEach((color, i) => {
+    ctx.fillStyle = color
+    ctx.fillRect(i * barW, 0, barW + 1, 74 * s)
+  })
+  ctx.restore()
+
+  // --- resolution star: sharpness loss shows here -------------------------
+  const starR = 168 * s
+  const sx = W * 0.16
+  const sy = H * 0.60
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(sx, sy, starR, 0, Math.PI * 2)
+  ctx.fillStyle = '#ffffff'
+  ctx.fill()
+  ctx.clip()
+  ctx.fillStyle = '#000000'
+  for (let i = 0; i < 72; i += 2) {
+    const a0 = (i / 72) * Math.PI * 2 + t * 0.35
+    const a1 = ((i + 1) / 72) * Math.PI * 2 + t * 0.35
+    ctx.beginPath()
+    ctx.moveTo(sx, sy)
+    ctx.arc(sx, sy, starR, a0, a1)
+    ctx.closePath()
+    ctx.fill()
+  }
+  ctx.restore()
+  ctx.strokeStyle = 'rgba(255,255,255,.9)'
+  ctx.lineWidth = 3 * s
+  ctx.beginPath()
+  ctx.arc(sx, sy, starR, 0, Math.PI * 2)
+  ctx.stroke()
+
+  // --- fine gratings: the first thing a low bitrate smears ----------------
+  const gx = W * 0.33
+  const gy = H * 0.46
+  const gw = 300 * s
+  const gh = 150 * s
+  ctx.save()
+  rr(gx, gy, gw, gh, 14 * s)
+  ctx.fillStyle = '#ffffff'
+  ctx.fill()
+  ctx.clip()
+  ctx.fillStyle = '#000'
+  for (let i = 0; i * 6 * s < gw; i += 1) {
+    const step = (1 + (i % 4)) * s
+    ctx.fillRect(gx + i * 6 * s, gy, step, gh)
+  }
+  ctx.restore()
+
+  // --- smooth ramp: banding shows here ------------------------------------
+  const ry = gy + gh + 26 * s
+  const ramp = ctx.createLinearGradient(gx, 0, gx + gw, 0)
+  ramp.addColorStop(0, '#000')
+  ramp.addColorStop(1, '#fff')
+  ctx.fillStyle = ramp
+  rr(gx, ry, gw, 90 * s, 14 * s)
+  ctx.fill()
+
+  // --- moving subject: motion artefacts show here -------------------------
+  const ox = W * 0.72 + Math.cos(T) * 210 * s
+  const oy = H * 0.55 + Math.sin(T * 2) * 120 * s
+  const orb = ctx.createRadialGradient(ox - 40 * s, oy - 50 * s, 10 * s, ox, oy, 165 * s)
+  orb.addColorStop(0, '#ffffff')
+  orb.addColorStop(0.35, theme.a)
+  orb.addColorStop(1, theme.b)
+  ctx.beginPath()
+  ctx.arc(ox, oy, 150 * s, 0, Math.PI * 2)
+  ctx.fillStyle = orb
+  ctx.shadowColor = 'rgba(0,0,0,.45)'
+  ctx.shadowBlur = 60 * s
+  ctx.shadowOffsetY = 24 * s
+  ctx.fill()
+  ctx.shadowColor = 'transparent'
+  ctx.shadowBlur = 0
+  ctx.shadowOffsetY = 0
+  // fine rings on the subject, so softening is obvious on a moving object
+  ctx.strokeStyle = 'rgba(255,255,255,.85)'
+  for (let i = 1; i <= 6; i += 1) {
+    ctx.lineWidth = 1.5 * s
+    ctx.beginPath()
+    ctx.arc(ox, oy, i * 21 * s, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+
+  // --- crisp typography ---------------------------------------------------
+  const pad = 54 * s
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = 'rgba(0,0,0,.35)'
+  rr(pad, 100 * s, 470 * s, 122 * s, 20 * s)
+  ctx.fill()
+  ctx.fillStyle = '#fff'
+  ctx.font = `700 ${64 * s}px -apple-system, "SF Pro Display", "Segoe UI", Roboto, sans-serif`
+  ctx.fillText(theme.name, pad + 26 * s, 116 * s)
+  ctx.font = `500 ${26 * s}px ui-monospace, "SF Mono", Menlo, monospace`
+  ctx.fillStyle = 'rgba(255,255,255,.92)'
+  ctx.fillText(`${W}×${H}  ·  CALL BOTS`, pad + 28 * s, 180 * s)
+
+  // running timecode: proves the stream is live and shows freezes at once
+  const frames = Math.round(t * 1000)
+  const tc = `${String(Math.floor(frames / 100)).padStart(2, '0')}:${String(frames % 100).padStart(2, '0')}`
+  ctx.textAlign = 'right'
+  ctx.fillStyle = 'rgba(0,0,0,.35)'
+  rr(W - pad - 300 * s, 100 * s, 300 * s, 84 * s, 20 * s)
+  ctx.fill()
+  ctx.fillStyle = '#fff'
+  ctx.font = `700 ${52 * s}px ui-monospace, "SF Mono", Menlo, monospace`
+  ctx.fillText(tc, W - pad - 26 * s, 116 * s)
+  ctx.textAlign = 'left'
+
+  // --- live meter along the bottom ---------------------------------------
+  const bars2 = 56
+  const bw = (W - pad * 2) / bars2
+  for (let i = 0; i < bars2; i += 1) {
+    const level = 0.35 + 0.65 * Math.abs(Math.sin(i * 0.4 + T * 3))
+    const bh = level * 90 * s
+    ctx.fillStyle = i % 3 === 0 ? theme.c : theme.a
+    rr(pad + i * bw + 2 * s, H - pad - bh, bw - 4 * s, bh, 4 * s)
+    ctx.fill()
+  }
+}
+</script>
