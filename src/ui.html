@@ -340,23 +340,14 @@
         <div>
           <div class="field" style="margin-bottom:0">
             <label>Simulated users</label>
-            <div class="users-toolbar">
-              <input type="number" id="pickCount" min="1" placeholder="How many users to select"
-                     style="flex:1;min-width:0;height:32px;padding:0 12px;border-radius:9px;background:var(--card);border:1px solid var(--line-2);outline:none;font-size:13px">
-              <button class="quick" data-pick="all">All</button>
-              <button class="quick" data-pick="none">None</button>
-            </div>
             <div class="users-grid" id="usersGrid"></div>
             <div class="hint" id="userHint">Select who joins the call.</div>
           </div>
 
           <div class="field" style="margin-top:20px;margin-bottom:0">
             <label>Guests</label>
-            <div style="display:flex;align-items:center;gap:10px">
-              <input type="number" id="guestsAtLaunch" min="0" max="50" value="0"
-                     style="width:120px;height:42px;padding:0 14px;border-radius:var(--r-sm);background:var(--card);border:1px solid var(--line-2);outline:none;font-size:14px">
-              <button class="quick" id="pickFirst" style="height:42px;padding:0 18px;font-size:13px">Select</button>
-            </div>
+            <input type="number" id="guestsAtLaunch" min="0" max="50" value="0"
+                   style="width:120px;height:42px;padding:0 14px;border-radius:var(--r-sm);background:var(--card);border:1px solid var(--line-2);outline:none;font-size:14px">
           </div>
         </div>
 
@@ -479,44 +470,8 @@ const S = {
 }
 
 /* ---------- launch panel ---------- */
-const applySelection = (take) => {
-  S.selected.clear()
-  if (take > 0) {
-    ;[...document.querySelectorAll('#usersGrid .uchip')]
-      .slice(0, take)
-      .forEach((chip) => S.selected.add(chip.dataset.slug))
-  }
-  for (const chip of document.querySelectorAll('#usersGrid .uchip')) {
-    const on = S.selected.has(chip.dataset.slug)
-    chip.classList.toggle('on', on)
-    chip.setAttribute('aria-pressed', String(on))
-  }
-  updateUserHint()
-}
-
-// Select is the one "apply" for the roster: it takes the typed user count and
-// leaves the guest count as typed. Either alone is enough to launch.
 const guestCount = () => Math.max(0, Number($('#guestsAtLaunch').value) || 0)
-
-const pickFirstN = () => {
-  const n = Number($('#pickCount').value)
-  if ((!Number.isInteger(n) || n < 1) && guestCount() === 0) {
-    return toast('Type how many users or guests to add', '-warn')
-  }
-  if (Number.isInteger(n) && n >= 1) applySelection(n)
-  else updateUserHint()
-}
-$('#pickFirst').onclick = pickFirstN
-// wrapped: updateUserHint is declared further down, so referencing it directly
-// here would hit the temporal dead zone
 $('#guestsAtLaunch').oninput = () => updateUserHint()
-$('#pickCount').onkeydown = (event) => {
-  if (event.key === 'Enter') { event.preventDefault(); pickFirstN() }
-}
-
-for (const btn of document.querySelectorAll('[data-pick]')) {
-  btn.onclick = () => applySelection(btn.dataset.pick === 'all' ? Number.MAX_SAFE_INTEGER : 0)
-}
 
 const renderUserChips = (users) => {
   const grid = $('#usersGrid')
