@@ -54,7 +54,18 @@ const parse = (url) => {
 
 // Bots join as guests, which have no lobby: name form -> call surface.
 const join = async ({ page, target, displayName, log, fail }) => {
-  await page.goto(target.url, { waitUntil: 'domcontentloaded' })
+  try {
+    await page.goto(target.url, { waitUntil: 'domcontentloaded' })
+  } catch (error) {
+    // The raw Playwright timeout names the symptom, never the cause, and the
+    // cause at this point is almost always too many bots for the machine.
+    await fail(
+      'entry',
+      /timeout/iu.test(error.message)
+        ? 'the page did not load in time — this machine is overloaded, send fewer bots'
+        : error.message,
+    )
+  }
 
   const nameField = page.locator(SEL.guestName)
   const blocked = page.locator(SEL.guestBlocked)

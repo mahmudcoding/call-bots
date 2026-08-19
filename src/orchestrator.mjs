@@ -99,7 +99,9 @@ export class Roster {
     })
     log.info(`preparing ${batch.length} bot(s)`)
     const media = await ensureGuestFixtures(batch, this.options)
-    const options = overrides ? { ...this.options, ...overrides } : this.options
+    // Every browser in a batch competes with the ones still starting, so the
+    // size of the batch is part of how long anything takes.
+    const options = { ...this.options, ...(overrides ?? {}), batchSize: total }
     const guests = batch.map((guest) => new Guest(guest, media.get(guest.slug), options))
     this.guests.push(...guests)
     this.#manifest()

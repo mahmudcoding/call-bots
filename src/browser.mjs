@@ -96,7 +96,10 @@ export const launchGuest = async (guest, media, options) => {
     viewport: { width: 960, height: 540 },
   })
   await context.grantPermissions(['camera', 'microphone'], { origin: options.baseUrl })
-  context.setDefaultTimeout(20_000)
+  // A fixed budget fails a whole large batch at once: while fifty browsers are
+  // starting, none of them loads a page in twenty seconds, and every bot dies
+  // of a timeout that says nothing about the real problem.
+  context.setDefaultTimeout(Math.min(120_000, 20_000 + (options.batchSize ?? 1) * 2_000))
   const page = await context.newPage()
   return { browser, context, page }
 }
