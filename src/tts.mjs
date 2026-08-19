@@ -48,19 +48,27 @@ export const listVoices = async () => {
       .filter((line) => /\ben_/u.test(line))
       .map((line) => line.trim().split(/\s{2,}|\s(?=[a-z]{2}_)/u)[0].trim())
       .filter(Boolean)
-    // Prefer the voices that actually sound like a person. Anything outside
-    // this list (Fred, Junior, Zarvox and friends) reads as a robot, which is
-    // the opposite of what a call full of bots should sound like.
-    const natural = [
-      'Samantha', 'Daniel', 'Karen', 'Moira', 'Tessa', 'Rishi', 'Tara', 'Aman',
-      'Sandy', 'Shelley', 'Reed', 'Flo', 'Eddy', 'Nicky', 'Aaron', 'Serena',
-    ]
-    const score = (voice) => {
-      const base = voice.replace(/\s*\(.*\)$/u, '')
-      const rank = natural.indexOf(base)
-      return rank === -1 ? Infinity : rank
+    // Male voices only: the footage is five men, and a man on screen speaking
+    // with a woman's voice is the first thing anyone notices. Ordered by how
+    // much each one sounds like a person — everything outside this list (Fred,
+    // Junior, Zarvox and friends) reads as a robot.
+    const natural = ['Alex', 'Tom', 'Daniel', 'Rishi', 'Aman', 'Reed', 'Rocko', 'Eddy', 'Grandpa']
+    const baseName = (voice) => voice.replace(/\s*\(.*\)$/u, '').trim()
+    // Apple ships a compact version of each voice and downloads a far better
+    // one on request, named "(Enhanced)" or "(Premium)". Prefer those when the
+    // machine has them.
+    const quality = (voice) => (/premium/iu.test(voice) ? 0 : /enhanced/iu.test(voice) ? 1 : 2)
+
+    const best = new Map()
+    for (const voice of all) {
+      const base = baseName(voice)
+      if (!natural.includes(base)) continue
+      const held = best.get(base)
+      if (!held || quality(voice) < quality(held)) best.set(base, voice)
     }
-    const ranked = all.filter((voice) => score(voice) !== Infinity).sort((a, b) => score(a) - score(b))
+    const ranked = [...best.entries()]
+      .sort((a, b) => natural.indexOf(a[0]) - natural.indexOf(b[0]))
+      .map(([, voice]) => voice)
     cachedVoices = ranked.length ? ranked : all
   } catch {
     cachedVoices = []
@@ -76,9 +84,16 @@ export const synthesizeSpeech = async (phrase, voice = null) => {
   const tmpFile = join(tmpdir(), `calls-sim-tts-${process.pid}-${Date.now()}.wav`)
   try {
     if (engine === 'say') {
-      const args = ['-o', tmpFile, '--data-format=LEI16@48000']
+      // Default delivery is faster than anyone talks on a call and runs
+      // sentences together. Slowing it slightly and letting it breathe at the
+      // punctuation is most of the difference between "a person" and "a
+      // computer reading".
+      const spoken = phrase
+        .replace(/([.!?])\s+/gu, '$1 [[slnc 320]] ')
+        .replace(/,\s+/gu, ', [[slnc 90]] ')
+      const args = ['-o', tmpFile, '--data-format=LEI16@48000', '-r', '158']
       if (voice) args.push('-v', voice)
-      await run('say', [...args, phrase])
+      await run('say', [...args, spoken])
     } else if (engine === 'powershell') {
       const script =
         "Add-Type -AssemblyName System.Speech; " +

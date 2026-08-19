@@ -13,7 +13,8 @@
     "doctor": "node src/cli.mjs doctor",
     "clean": "node src/cli.mjs clean",
     "postinstall": "node scripts/postinstall.mjs",
-    "test:platforms": "node scripts/test-platforms.mjs"
+    "test:platforms": "node scripts/test-platforms.mjs",
+    "voices": "node scripts/make-voices.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -62,9 +62,15 @@ node src/cli.mjs join "<invite-link>" --guests 4
   1920x1080 at 30 fps. They ship inside the app, so a fresh download joins a
   call with real faces — nothing to import, no network. Bots cycle through the
   five.
-- **Audio**: continuous natural speech, a different voice and a different
-  passage per bot, so a call sounds like a room of people rather than one clip
-  playing five times.
+- **Audio**: continuous speech, a different male voice and a different passage
+  per bot, so a call sounds like a room of people rather than one clip playing
+  five times. Male throughout, to match the footage.
+
+Rebuild the voices with `npm run voices`. macOS ships a compact version of each
+voice and downloads a much better one on request — System Settings ›
+Accessibility › Spoken Content › System Voice › Manage Voices, look for
+**Enhanced** or **Premium**. Install those and rerun it; they are picked up
+automatically and sound markedly more human than the compact ones.
 
 To use your own footage instead, put a few videos in a folder — people talking
 to camera looks the most convincing — and import them (needs ffmpeg):
