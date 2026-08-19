@@ -15,6 +15,11 @@ const defaultHome = () => {
   return join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), 'call-bots')
 }
 
+// Footage and voices that ship inside the app, so a fresh download has real
+// faces on the first call without importing anything. Imported clips in the
+// user's own fixtures folder take priority over these.
+export const bundledMediaDir = join(projectRoot, 'media')
+
 export const baseDir = process.env.CALL_BOTS_HOME ? resolve(process.env.CALL_BOTS_HOME) : defaultHome()
 export const dataDir = join(baseDir, '.data')
 export const fixturesDir = join(baseDir, 'fixtures')

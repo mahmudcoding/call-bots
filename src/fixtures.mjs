@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { fixturesDir } from './config.mjs'
+import { bundledMediaDir, fixturesDir } from './config.mjs'
 import { plain as log } from './log.mjs'
 import { renderClip } from './render.mjs'
 import { listVoices, synthesizeSpeech } from './tts.mjs'
-import { encodeWav, synthesizeToneBurst } from './wav.mjs'
+import { encodeWav, hasSpeech, synthesizeToneBurst } from './wav.mjs'
 
 export const THEME_COUNT = 5
 
@@ -66,18 +66,24 @@ const PASSAGES = [
 const clipPath = (theme, width, height, fps, seconds) =>
   join(fixturesDir, `clip-${theme + 1}-${width}x${height}-${fps}fps-${seconds}s.y4m`)
 
-// Real footage imported with scripts/import-videos.mjs wins over the drawn
-// clips: any clip-<n>-*.mjpeg in the fixtures folder is used as-is.
-const importedClip = (theme) => {
-  try {
-    const match = readdirSync(fixturesDir)
-      .filter((name) => name.startsWith(`clip-${theme + 1}-`) && name.endsWith('.mjpeg'))
-      .sort()
-      .pop()
-    return match ? join(fixturesDir, match) : null
-  } catch {
-    return null
+// Real footage beats the drawn clips. Videos imported on this machine with
+// scripts/import-videos.mjs come first; the footage shipped inside the app is
+// the fallback, so a fresh install already has faces.
+const mediaDirs = [fixturesDir, bundledMediaDir]
+
+const realClip = (theme) => {
+  for (const dir of mediaDirs) {
+    try {
+      const match = readdirSync(dir)
+        .filter((name) => name.startsWith(`clip-${theme + 1}-`) && name.endsWith('.mjpeg'))
+        .sort()
+        .pop()
+      if (match) return join(dir, match)
+    } catch {
+      /* directory may not exist yet */
+    }
   }
+  return null
 }
 
 // Clips are rendered on demand: a two-bot call never pays for five of them.
@@ -86,8 +92,8 @@ export const ensureClip = async (theme, { size = '1920x1080', fps = 12, seconds 
   if (!width || !height || width % 2 || height % 2) {
     throw new Error(`--size must be even WxH dimensions, got "${size}" (Chrome requires C420)`)
   }
-  const imported = importedClip(theme)
-  if (imported) return imported
+  const real = realClip(theme)
+  if (real) return real
   const out = clipPath(theme, width, height, fps, seconds)
   if (existsSync(out)) return out
   mkdirSync(fixturesDir, { recursive: true })
@@ -102,15 +108,32 @@ export const ensureClip = async (theme, { size = '1920x1080', fps = 12, seconds 
   return out
 }
 
-// A clip imported with its own soundtrack speaks for itself.
-const importedVoice = (theme) => {
-  const file = join(fixturesDir, `voice-${theme + 1}.wav`)
-  return existsSync(file) ? file : null
+// A clip that came with its own soundtrack speaks for itself, and the shipped
+// footage carries a matching voice per clip. Only when neither exists does a
+// bot fall back to speech synthesised on this machine.
+const realVoice = (theme) => {
+  for (const dir of mediaDirs) {
+    const file = join(dir, `voice-${theme + 1}.wav`)
+    if (existsSync(file) && speaks(file)) return file
+  }
+  return null
+}
+
+// A voice file that is mostly silence sends a bot into a call that never says
+// anything, and nothing on screen shows it. Anything that fails this is passed
+// over in favour of speech synthesised here.
+const speaks = (file) => {
+  try {
+    return hasSpeech(readFileSync(file))
+  } catch {
+    return false
+  }
 }
 
 const ensureVoice = async (n, voices) => {
   const audio = join(fixturesDir, `bot-${n}.wav`)
-  if (existsSync(audio)) return audio
+  // Regenerate rather than trust a cached file: an old layout left silent ones.
+  if (existsSync(audio) && speaks(audio)) return audio
   const passage = PASSAGES[(n - 1) % PASSAGES.length].replace(/\s+/gu, ' ').trim()
   const voice = voices.length ? voices[(n - 1) % voices.length] : null
   let speech = null
@@ -122,6 +145,7 @@ const ensureVoice = async (n, voices) => {
   // Fall back to tones only when the machine has no speech engine at all.
   if (!speech) speech = synthesizeToneBurst(n, 20)
   writeFileSync(audio, encodeWav(speech))
+  if (!speaks(audio)) log.warn(`bot ${n} has little audible speech — it will be quiet in the call`)
   return audio
 }
 
@@ -135,7 +159,7 @@ export const ensureGuestFixtures = async (guests, options = {}) => {
   for (const guest of guests) {
     const theme = (guest.n - 1) % THEME_COUNT
     const video = await ensureClip(theme, options)
-    const audio = importedVoice(theme) ?? (await ensureVoice(guest.n, voices))
+    const audio = realVoice(theme) ?? (await ensureVoice(guest.n, voices))
     result.set(guest.slug, { video, audio, theme })
   }
   return result

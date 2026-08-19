@@ -5,6 +5,7 @@
 // rate, roughly a twentieth of the size. Needs ffmpeg on PATH.
 //
 //   node scripts/import-videos.mjs ~/Downloads/meeting-clips
+//   node scripts/import-videos.mjs ~/Downloads/meeting-clips --bundle   # ship them
 //
 // Every video in that folder becomes clip-1, clip-2 … in fixture order, and its
 // own soundtrack becomes that bot's voice. Video and audio are cut from the
@@ -17,7 +18,7 @@ import { extname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
-const { fixturesDir } = await import('../src/config.mjs')
+const { bundledMediaDir, fixturesDir } = await import('../src/config.mjs')
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`)
@@ -29,10 +30,13 @@ const FPS = Number(arg('fps', '30'))
 const SIZE = arg('size', '1920x1080')
 const START = Number(arg('start', '0'))
 const QUALITY = arg('quality', '3') // ffmpeg -q:v, lower is better
+// --bundle writes into media/, which is copied into the .app at build time, so
+// the clips travel with the app instead of living on this machine only.
+const outDir = process.argv.includes('--bundle') ? bundledMediaDir : fixturesDir
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi', '.ogv'])
 
 if (!source || !existsSync(source)) {
-  console.error(`usage: node scripts/import-videos.mjs <folder-with-videos> [--seconds 8] [--fps 30] [--size 1920x1080] [--start 0]
+  console.error(`usage: node scripts/import-videos.mjs <folder-with-videos> [--bundle] [--seconds 8] [--fps 30] [--size 1920x1080] [--start 0]
 
 Put a handful of clips in a folder — people talking to camera works best —
 and they become the faces the bots publish.`)
@@ -55,10 +59,10 @@ if (files.length === 0) {
 }
 
 const [width, height] = SIZE.split('x').map(Number)
-mkdirSync(fixturesDir, { recursive: true })
+mkdirSync(outDir, { recursive: true })
 
 for (const [index, name] of files.entries()) {
-  const out = join(fixturesDir, `clip-${index + 1}-${width}x${height}-${FPS}fps-${SECONDS}s.mjpeg`)
+  const out = join(outDir, `clip-${index + 1}-${width}x${height}-${FPS}fps-${SECONDS}s.mjpeg`)
   const tmp = `${out}.part`
   process.stdout.write(`${index + 1}/${files.length} ${name} … `)
   const started = Date.now()
@@ -77,7 +81,7 @@ for (const [index, name] of files.entries()) {
     renameSync(tmp, out)
 
     // the clip's own audio, same segment, as the bot's voice
-    const voice = join(fixturesDir, `voice-${index + 1}.wav`)
+    const voice = join(outDir, `voice-${index + 1}.wav`)
     const voiceTmp = `${voice}.part`
     let sound = 'no audio track — will use synthesised speech'
     try {
@@ -101,5 +105,5 @@ for (const [index, name] of files.entries()) {
     console.log(`failed: ${String(error.stderr ?? error.message).trim().split('\n').pop()}`)
   }
 }
-console.log(`\nclips written to ${fixturesDir}`)
+console.log(`\nclips written to ${outDir}`)
 console.log('bots use clip-1 … clip-5 in order; restart a session to pick them up')

@@ -39,24 +39,32 @@ node src/cli.mjs join "<invite-link>" --guests 4
 
 ## What each bot publishes
 
-- **Video**: real footage, if you give it some. Put a few clips in a folder —
-  people talking to camera looks the most convincing — and import them:
-
-  ```bash
-  node scripts/import-videos.mjs ~/Downloads/meeting-clips
-  ```
-
-  They become `clip-1` … `clip-5`, and bots cycle through them. Needs ffmpeg.
-  Clips are converted to 1920x1080 MJPEG at 30 fps, which is what Chrome's fake
-  camera accepts; raw Y4M at that size would be about 93 MB per second.
-  Anything you do not supply falls back to a drawn clip: bright, detailed
-  patterns built to make quality loss obvious on the receiving end.
-- **Audio**: continuous natural speech, a different system voice and a different
+- **Video**: five clips of different people at a desk looking into the camera,
+  1920x1080 at 30 fps. They ship inside the app, so a fresh download joins a
+  call with real faces — nothing to import, no network. Bots cycle through the
+  five.
+- **Audio**: continuous natural speech, a different voice and a different
   passage per bot, so a call sounds like a room of people rather than one clip
   playing five times.
 
-Clips and run data live in `~/Library/Application Support/CallBots` on macOS
-(`CALL_BOTS_HOME` overrides it).
+To use your own footage instead, put a few videos in a folder — people talking
+to camera looks the most convincing — and import them (needs ffmpeg):
+
+```bash
+node scripts/import-videos.mjs ~/Downloads/meeting-clips            # this machine
+node scripts/import-videos.mjs ~/Downloads/meeting-clips --bundle   # ship with the app
+```
+
+They become `clip-1` … `clip-5`, and each clip's own soundtrack becomes that
+bot's voice. Clips are converted to MJPEG, which is what Chrome's fake camera
+accepts; raw Y4M at 1080p30 would be about 93 MB per second. Imports on this
+machine win over the shipped footage; a clip with no source at all falls back to
+a drawn one — bright, detailed patterns built to make quality loss obvious on
+the receiving end.
+
+Shipped footage lives in `media/` (copied into the `.app` at build time).
+Imported clips and run data live in `~/Library/Application Support/CallBots` on
+macOS (`CALL_BOTS_HOME` overrides it).
 
 ## Notes
 

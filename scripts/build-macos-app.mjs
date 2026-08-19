@@ -3,7 +3,7 @@
 // iconutil, codesign, ditto).
 import { execFileSync } from 'node:child_process'
 import {
-  chmodSync, cpSync, createWriteStream, existsSync, mkdirSync, rmSync, writeFileSync,
+  chmodSync, cpSync, createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -85,6 +85,34 @@ cpSync(join(projectRoot, 'node_modules'), join(resources, 'app', 'node_modules')
   recursive: true,
   filter: (source) => !source.includes(`node_modules${'/'}.bin`),
 })
+
+// The footage travels with the app: whoever downloads it gets real faces and
+// voices on their first call, with nothing to import and no network needed.
+const media = join(projectRoot, 'media')
+if (existsSync(media)) {
+  const { readFileSync } = await import('node:fs')
+  const { speechCoverage, MIN_SPEECH_COVERAGE } = await import('../src/wav.mjs')
+  // A silent voice is invisible until someone joins the call and hears nothing,
+  // so it must not get as far as a shipped app.
+  const mute = readdirSync(media)
+    .filter((name) => name.startsWith('voice-') && name.endsWith('.wav'))
+    .map((name) => ({ name, coverage: speechCoverage(readFileSync(join(media, name))) }))
+    .filter(({ coverage }) => coverage < MIN_SPEECH_COVERAGE)
+  if (mute.length > 0) {
+    console.error('\nthese voices are mostly silence — bots using them would say nothing:')
+    for (const { name, coverage } of mute) {
+      console.error(`  ${name} — ${(coverage * 100).toFixed(0)}% of it carries sound`)
+    }
+    console.error('\ndelete them and re-run, or re-import footage that has audio')
+    process.exit(1)
+  }
+  const clips = readdirSync(media).filter((name) => name.endsWith('.mjpeg')).length
+  step(`copying ${clips} bundled clip(s)`)
+  cpSync(media, join(resources, 'app', 'media'), { recursive: true })
+} else {
+  console.warn('! no media/ folder — the app will ship with drawn clips instead of real footage')
+  console.warn('  populate it with: node scripts/import-videos.mjs <folder-of-videos>')
+}
 
 // --- 4. bundled Node runtime -------------------------------------------------
 const tarName = `node-v${NODE_VERSION}-darwin-${arch}.tar.gz`

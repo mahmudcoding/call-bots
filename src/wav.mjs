@@ -109,12 +109,23 @@ export const synthesizeToneBurst = (userIndex, seconds) => {
   return out
 }
 
-// Places `speech` at `offsetSeconds` inside a silent cycle of `cycleSeconds`.
-export const assembleCycle = (speech, offsetSeconds, cycleSeconds, maxSpeechSeconds) => {
-  const total = Math.floor(cycleSeconds * SAMPLE_RATE)
-  const out = new Float32Array(total)
-  const offset = Math.floor(offsetSeconds * SAMPLE_RATE)
-  const cap = Math.min(speech.length, Math.floor(maxSpeechSeconds * SAMPLE_RATE), total - offset)
-  for (let i = 0; i < cap; i += 1) out[offset + i] = speech[i]
-  return out
+// Fraction of one-second windows that carry sound. A bot whose voice file is
+// mostly silence looks perfectly connected and says nothing, which is invisible
+// from the outside — so every voice is checked before it is used or shipped.
+export const speechCoverage = (buffer) => {
+  const samples = decodeWav(buffer)
+  let loud = 0
+  let windows = 0
+  for (let start = 0; start + SAMPLE_RATE <= samples.length; start += SAMPLE_RATE) {
+    let peak = 0
+    for (let i = start; i < start + SAMPLE_RATE; i += 1) peak = Math.max(peak, Math.abs(samples[i]))
+    if (peak > 0.02) loud += 1
+    windows += 1
+  }
+  return windows === 0 ? 0 : loud / windows
 }
+
+// Below this a file is silence with a little sound in it, not a speaking bot.
+export const MIN_SPEECH_COVERAGE = 0.25
+
+export const hasSpeech = (buffer) => speechCoverage(buffer) >= MIN_SPEECH_COVERAGE
