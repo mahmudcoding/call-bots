@@ -449,18 +449,6 @@ export const startServer = async ({ port = 4610, configPath = null, open = true 
           .finally(() => process.exit(0))
         return
       }
-      if (request.method === 'POST' && url.pathname === '/api/reveal-config') {
-        const file = resolveConfigPath(configPath)
-        const reveal =
-          process.platform === 'darwin'
-            ? ['open', ['-R', file]]
-            : process.platform === 'win32'
-              ? ['explorer', [`/select,${file}`]]
-              : ['xdg-open', [dirname(file)]]
-        execFile(reveal[0], reveal[1], () => {})
-        json(response, 200, { ok: true, file })
-        return
-      }
       if (request.method === 'POST' && url.pathname === '/api/action') {
         const body = await readBody(request)
         const results = await runAction(body.slug, body.action)

@@ -349,7 +349,7 @@
         <div>
           <div class="field" id="urlField">
             <label>Call link</label>
-            <input type="text" id="callUrl" placeholder="paste the call URL or its guest invite link" spellcheck="false">
+            <input type="text" id="callUrl" placeholder="paste the call URL or its invite link" spellcheck="false">
           </div>
 
           <div class="opts">
@@ -377,7 +377,6 @@
 
       <div class="hint" style="display:flex;align-items:center;gap:8px;margin-top:24px;padding-top:16px;border-top:1px solid var(--line)">
         <span class="spacer"></span>
-        <button id="revealCfg" class="btn" style="height:26px;padding:0 10px;font-size:11.5px;flex:none">Accounts file…</button>
         <button id="wsToggle" class="btn" style="height:26px;padding:0 10px;font-size:11.5px;flex:none">Workspace setup…</button>
       </div>
 
@@ -648,9 +647,6 @@ $('#quitBtn').onclick = async () => {
     '<div style="display:grid;place-items:center;height:100vh;color:#8b93a7;font-size:15px">' +
     'Server stopped — you can close this tab.</div>'
 }
-
-/* ---------- reveal config ---------- */
-$('#revealCfg').onclick = () => post('/api/reveal-config').catch((error) => toast(error.message, '-err'))
 
 /* ---------- stop (two-step confirm) ---------- */
 let stopArmed = null
