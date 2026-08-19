@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { fixturesDir } from './config.mjs'
@@ -66,12 +66,28 @@ const PASSAGES = [
 const clipPath = (theme, width, height, fps, seconds) =>
   join(fixturesDir, `clip-${theme + 1}-${width}x${height}-${fps}fps-${seconds}s.y4m`)
 
+// Real footage imported with scripts/import-videos.mjs wins over the drawn
+// clips: any clip-<n>-*.mjpeg in the fixtures folder is used as-is.
+const importedClip = (theme) => {
+  try {
+    const match = readdirSync(fixturesDir)
+      .filter((name) => name.startsWith(`clip-${theme + 1}-`) && name.endsWith('.mjpeg'))
+      .sort()
+      .pop()
+    return match ? join(fixturesDir, match) : null
+  } catch {
+    return null
+  }
+}
+
 // Clips are rendered on demand: a two-bot call never pays for five of them.
 export const ensureClip = async (theme, { size = '1920x1080', fps = 12, seconds = 6 } = {}, onProgress) => {
   const [width, height] = size.split('x').map(Number)
   if (!width || !height || width % 2 || height % 2) {
     throw new Error(`--size must be even WxH dimensions, got "${size}" (Chrome requires C420)`)
   }
+  const imported = importedClip(theme)
+  if (imported) return imported
   const out = clipPath(theme, width, height, fps, seconds)
   if (existsSync(out)) return out
   mkdirSync(fixturesDir, { recursive: true })
