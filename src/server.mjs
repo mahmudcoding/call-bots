@@ -196,8 +196,8 @@ const runAction = async (slug, action) => {
         results[guest.label] = await guest.setShare(false)
         break
       case 'leave':
-        await guest.teardown()
-        results[guest.label] = guest.state
+        await roster.remove(guest.user.slug)
+        results[guest.label] = 'removed'
         break
       default:
         throw new Error(`unknown action "${action}"`)
@@ -287,6 +287,10 @@ export const startServer = async ({ port = 4610, open = true }) => {
       if (request.method === 'POST' && url.pathname === '/api/action') {
         const body = await readBody(request)
         const results = await runAction(body.slug, body.action)
+        // removing the last guest ends the session, so the link can change
+        if (session.roster && session.roster.guests.length === 0) {
+          await stopSession()
+        }
         broadcast(await stateSnapshot())
         json(response, 200, { ok: true, results })
         return

@@ -77,7 +77,7 @@
     background: linear-gradient(135deg, #7d6dff, #6d5efc 55%, #5b4bf0);
     border-color: transparent; color: #fff; box-shadow: var(--glow);
   }
-  .btn.-accent:hover { background: linear-gradient(135deg, #8f81ff, #7a6bff); transform: translateY(-1px); }
+  .btn.-accent:hover { background: linear-gradient(135deg, #8f81ff, #7a6bff); }
   .btn.-danger { color: var(--danger); }
   .btn.-danger:hover { background: rgba(255,92,92,.12); border-color: rgba(255,92,92,.4); }
   .btn:disabled { opacity: .45; pointer-events: none; }
@@ -196,7 +196,6 @@
   <div class="brand"><div class="dot"></div>Call Bots</div>
   <span id="statusPill" class="pill">idle</span>
   <div class="spacer"></div>
-  <span id="verifyChip" class="chip" hidden>video playing <b id="verifyVal">–</b></span>
   <button id="stopBtn" class="btn -danger" hidden>Stop</button>
   <button id="quitBtn" class="btn" title="Close Call Bots">Quit</button>
 </header>
@@ -318,8 +317,8 @@ const twoStep = (id, confirmLabel, action) => {
     await action(btn)
   }
 }
-twoStep('#stopBtn', 'Confirm stop?', () => post('/api/stop').catch((e) => toast(e.message, '-err')))
-twoStep('#quitBtn', 'Confirm quit?', async (btn) => {
+twoStep('#stopBtn', 'Confirm', () => post('/api/stop').catch((e) => toast(e.message, '-err')))
+twoStep('#quitBtn', 'Confirm', async (btn) => {
   btn.disabled = true
   await post('/api/quit').catch(() => {})
   document.body.innerHTML =
@@ -480,10 +479,6 @@ const render = (state) => {
       S.cards.delete(slug)
     }
   }
-
-  const remote = state.verify?.remote
-  $('#verifyChip').hidden = !remote
-  if (remote) $('#verifyVal').textContent = `${remote.remotePlaying}/${remote.remote}`
 }
 
 /* ---------- live updates ---------- */

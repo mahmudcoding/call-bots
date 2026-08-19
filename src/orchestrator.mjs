@@ -97,6 +97,17 @@ export class Roster {
     return { added: guests.length - failures.length, failed: failures.length }
   }
 
+  // A guest that leaves is gone: close its browser and drop it from the roster
+  // so nothing lingers in the window.
+  async remove(slug) {
+    const guest = this.bySlug(slug)
+    if (!guest) return false
+    await guest.teardown().catch((error) => guest.log.warn(`teardown failed: ${error.message}`))
+    this.guests = this.guests.filter((candidate) => candidate !== guest)
+    this.#manifest()
+    return true
+  }
+
   async statusData() {
     const guests = []
     for (const [i, guest] of this.guests.entries()) {
