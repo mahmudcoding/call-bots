@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import http from 'node:http'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -39,23 +39,37 @@ onLog((entry) => broadcast({ type: 'log', entry }))
 // The .app has no npm; download Chromium through playwright's CLI with our own
 // runtime when the machine has no usable browser.
 let browserInstall = null
+let browserProgress = null // e.g. "42% of 165.5 MiB"
 const ensureBrowser = () => {
-  if (systemChromePath() || bundledChromiumPath() || browserInstall) return
+  // Chromium is what guests run (see browser.mjs), so fetch it even when the
+  // machine has Chrome installed.
+  if (bundledChromiumPath() || browserInstall) return
+  // playwright's exports map hides ./cli.js, so derive it from the package entry
   let cliPath
   try {
-    cliPath = createRequire(import.meta.url).resolve('playwright/cli.js')
+    cliPath = join(dirname(createRequire(import.meta.url).resolve('playwright')), 'cli.js')
   } catch {
-    log.warn('no browser found and playwright CLI unavailable — install Google Chrome')
+    cliPath = null
+  }
+  if (!cliPath || !existsSync(cliPath)) {
+    log.warn('cannot find the playwright CLI — install Google Chrome instead')
     return
   }
-  log.warn('no browser found — downloading Chromium (one-time, ~150 MB)…')
+  log.warn('downloading Chromium (one-time, ~150 MB)…')
   browserInstall = spawn(process.execPath, [cliPath, 'install', 'chromium'], {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  // playwright draws a progress bar; keep only the percentage for the window
   const relay = (stream) =>
     stream.on('data', (chunk) => {
-      const text = String(chunk).trim()
-      if (text) log.info(`[chromium] ${text.split('\n').pop()}`)
+      const text = String(chunk)
+      const percent = [...text.matchAll(/(\d{1,3})%\s+of\s+([\d.]+\s*\wiB)/gu)].pop()
+      if (percent) {
+        browserProgress = `${percent[1]}% of ${percent[2]}`
+        return
+      }
+      const line = text.trim().split('\n').pop()
+      if (line && !line.includes('|')) log.info(`[chromium] ${line}`)
     })
   relay(browserInstall.stdout)
   relay(browserInstall.stderr)
@@ -64,6 +78,7 @@ const ensureBrowser = () => {
       code === 0 ? 'Chromium ready' : 'Chromium download failed — install Google Chrome',
     )
     browserInstall = null
+    browserProgress = null
   })
 }
 
@@ -83,6 +98,9 @@ const stateSnapshot = async ({ withVerify = false } = {}) => {
       startedAt: session.startedAt,
       lastError: session.lastError,
       machine: machineProfile(),
+      browserReady: bundledChromiumPath() !== null || systemChromePath() !== null,
+      browserInstalling: browserInstall !== null,
+      browserProgress,
       session: rosterState,
       verify: session.verify,
     },

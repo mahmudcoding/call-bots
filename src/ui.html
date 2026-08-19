@@ -198,7 +198,7 @@
     <div class="bar">
       <div class="grow">
         <div class="lbl">Invite link</div>
-        <input type="text" id="link" placeholder="paste the call's invite link" spellcheck="false">
+        <input type="text" id="link" placeholder="paste invite link" spellcheck="false">
       </div>
       <div class="count">
         <div class="lbl">Guests</div>
@@ -216,8 +216,8 @@
     </div>
 
     <div class="empty" id="empty">
-      <b>No guests in a call yet</b>
-      <span>Paste the call's invite link, choose how many guests, and send them in.</span>
+      <b id="emptyTitle">No guests in a call yet</b>
+      <span id="emptyText">Paste the invite link, choose how many guests, and send them in.</span>
     </div>
 
     <div class="grid" id="cards"></div>
@@ -287,29 +287,18 @@ $('#goBtn').onclick = async () => {
 }
 $('#link').onkeydown = (event) => { if (event.key === 'Enter') $('#goBtn').click() }
 
-/* ---------- stop / quit, both two-step ---------- */
-const armed = new Map()
-const twoStep = (id, confirmLabel, action) => {
-  const btn = $(id)
-  const original = btn.textContent
-  btn.onclick = async () => {
-    if (!armed.get(id)) {
-      btn.textContent = confirmLabel
-      btn.classList.add('-danger')
-      armed.set(id, setTimeout(() => {
-        armed.delete(id)
-        btn.textContent = original
-        if (id !== '#stopBtn') btn.classList.remove('-danger')
-      }, 3000))
-      return
-    }
-    clearTimeout(armed.get(id))
-    armed.delete(id)
-    btn.textContent = original
-    await action(btn)
+/* ---------- stop ---------- */
+$('#stopBtn').onclick = async () => {
+  const btn = $('#stopBtn')
+  btn.disabled = true
+  try {
+    await post('/api/stop')
+  } catch (error) {
+    toast(error.message, '-err')
+  } finally {
+    btn.disabled = false
   }
 }
-twoStep('#stopBtn', 'Confirm', () => post('/api/stop').catch((e) => toast(e.message, '-err')))
 
 for (const btn of document.querySelectorAll('[data-all]')) {
   btn.onclick = async () => {
@@ -446,6 +435,21 @@ const render = (state) => {
     toast(state.lastError, '-err')
   }
   if (!state.lastError) S.errorShown = null
+
+  // the browser is fetched once on first run; say so instead of failing later
+  if (state.browserInstalling) {
+    $('#emptyTitle').textContent = 'Getting the browser ready'
+    $('#emptyText').textContent = state.browserProgress
+      ? `Downloading Chromium — ${state.browserProgress}. Guests can join as soon as it lands.`
+      : 'Downloading Chromium (one-time, about 150 MB). Guests can join as soon as it lands.'
+    $('#goBtn').disabled = true
+  } else if (!state.browserReady) {
+    $('#emptyTitle').textContent = 'No browser available'
+    $('#emptyText').textContent = 'Install Google Chrome, or run: npx playwright install chromium'
+  } else {
+    $('#emptyTitle').textContent = 'No guests in a call yet'
+    $('#emptyText').textContent = 'Paste the invite link, choose how many guests, and send them in.'
+  }
 
   const guests = state.session?.guests ?? []
   $('#empty').hidden = guests.length > 0

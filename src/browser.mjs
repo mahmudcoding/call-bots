@@ -37,20 +37,19 @@ export const bundledChromiumPath = () => {
   }
 }
 
-let resolved
+// Prefer Playwright's own Chromium over the system Chrome. Launching an app
+// out of /Applications makes macOS attribute that app's self-updates to us,
+// which raises a "prevented from modifying apps" prompt; Chromium lives in a
+// cache directory and never triggers it.
+// channel:'chromium' picks the FULL browser in new-headless mode. Plain
+// headless would use chrome-headless-shell, which ignores the fake-device
+// capture flags and joins with no camera or microphone at all.
 const resolveChannel = (preference) => {
   if (preference === 'chrome') return 'chrome'
-  if (preference === 'chromium') return undefined
-  if (resolved) return resolved === 'chromium' ? undefined : resolved
-  if (systemChromePath()) {
-    resolved = 'chrome'
-    return 'chrome'
-  }
-  if (bundledChromiumPath()) {
-    resolved = 'chromium'
-    return undefined
-  }
-  throw new Error('no browser found: install Google Chrome, or run: npx playwright install chromium')
+  if (preference === 'chromium') return 'chromium'
+  if (bundledChromiumPath()) return 'chromium'
+  if (systemChromePath()) return 'chrome'
+  throw new Error('no browser yet — Chromium is still downloading, try again in a moment')
 }
 
 // The marker arg lets `clean` find leftover processes after a hard kill.
@@ -83,7 +82,7 @@ export const launchGuest = async (guest, media, options) => {
   try {
     browser = await chromium.launch({ channel: primary, headless, args })
   } catch (error) {
-    const fallback = primary === 'chrome' ? undefined : 'chrome'
+    const fallback = primary === 'chrome' ? 'chromium' : 'chrome'
     const available = fallback === 'chrome' ? systemChromePath() : bundledChromiumPath()
     if ((options.browser && options.browser !== 'auto') || !available) throw error
     log.warn(`browser launch failed (${error.message.split('\n')[0]}); retrying`)
