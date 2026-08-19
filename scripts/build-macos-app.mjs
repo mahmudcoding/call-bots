@@ -180,7 +180,7 @@ step('ad-hoc code signing')
 run('codesign', ['--force', '--deep', '--sign', '-', appRoot])
 
 step('zipping')
-const zipPath = join(dist, `CallBots-${version}-${arch}.zip`)
+const zipPath = join(dist, 'call_bots.zip')
 rmSync(zipPath, { force: true })
 run('ditto', ['-c', '-k', '--keepParent', appRoot, zipPath])
 

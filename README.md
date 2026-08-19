@@ -24,7 +24,7 @@ machine can carry. On macOS, `npm run build:app` produces a double-click
 
 ## Sharing the app
 
-`npm run build:app` also writes `dist/CallBots-<version>-<arch>.zip`, which is
+`npm run build:app` also writes `dist/call_bots.zip`, which is
 everything a recipient needs — Node, the footage, the voices. They do not need
 Node, ffmpeg, or this repository.
 
