@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Calls Sim</title>
+<title>Call Bots</title>
 <style>
   :root {
     --bg: #08090b; --panel: #0e1015; --card: #13161c; --card-2: #1b1f27;
@@ -314,7 +314,7 @@
 <div id="connBanner">dashboard disconnected — retrying…</div>
 
 <header>
-  <div class="brand"><div class="dot"></div>Calls Sim</div>
+  <div class="brand"><div class="dot"></div>Call Bots</div>
   <span id="statusPill" class="pill -idle">idle</span>
   <div class="spacer"></div>
   <span id="countChip" class="chip" hidden>participants <b id="countVal">–</b></span>
@@ -331,15 +331,15 @@
   <!-- ============ launch ============ -->
   <section id="launch">
     <div class="panel">
-      <h1>Launch a simulated session</h1>
-      <div class="sub">Each user is a real browser signed into staging, publishing live audio and video.</div>
+      <h1>Send bots into a call</h1>
+      <div class="sub">Every bot is a real browser signed into staging, publishing live audio and video.</div>
 
       <div id="cfgError" class="cfg-error" hidden></div>
 
       <div id="launchForm" class="launch-grid">
         <div>
           <div class="field" style="margin-bottom:0">
-            <label>Simulated users</label>
+            <label>Bots</label>
             <div class="users-grid" id="usersGrid"></div>
             <div class="hint" id="userHint">Select who joins the call.</div>
           </div>
@@ -510,11 +510,11 @@ const updateUserHint = () => {
     const m = S.state?.machine
     hint.className = 'hint -warn'
     hint.textContent =
-      `${n} users — above about ${max} publishing at once, CPU contention can degrade ` +
+      `${n} bots — above about ${max} publishing at once, CPU contention can degrade ` +
       `the media itself on this machine${m ? ` (${m.memGB} GB RAM, ${m.cores} cores)` : ''}.`
   } else {
     hint.className = 'hint'
-    hint.textContent = n === 0 ? 'Select who joins the call.' : `${n} user${n === 1 ? '' : 's'} selected.`
+    hint.textContent = n === 0 ? 'Pick the bots that join the call.' : `${n} bot${n === 1 ? '' : 's'} selected.`
   }
 }
 
@@ -527,7 +527,7 @@ $('#launchBtn').onclick = async () => {
     }
     if (!body.link) throw new Error('paste the call link or the guest invite link')
     if (body.users.length === 0 && body.guests === 0) {
-      throw new Error('add at least one user or guest')
+      throw new Error('add at least one bot or guest')
     }
     $('#launchBtn').disabled = true
     await post('/api/launch', body)

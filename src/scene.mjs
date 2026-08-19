@@ -147,7 +147,7 @@ export const drawFrame = (canvas, t) => {
   drawText(canvas, tc, W - pad - textWidth(tc, scale), pad + 5 * s, scale, WHITE, 0.75)
 
   // caption strip, bottom
-  const label = 'ALOQA CALLS SIM'
+  const label = 'CALL BOTS'
   const labelScale = Math.max(2, Math.round(5 * s))
   const lw = textWidth(label, labelScale)
   canvas.roundRect(

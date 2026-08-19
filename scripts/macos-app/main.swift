@@ -49,12 +49,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
       contentRect: NSRect(x: 0, y: 0, width: 1360, height: 860),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered, defer: false)
-    window.title = "Aloqa Calls Sim"
+    window.title = "Call Bots"
     window.minSize = NSSize(width: 980, height: 620)
     window.appearance = NSAppearance(named: .darkAqua)
     window.backgroundColor = NSColor(red: 0.043, green: 0.051, blue: 0.071, alpha: 1)
     window.center()
-    window.setFrameAutosaveName("AloqaCallsSimMain")
+    window.setFrameAutosaveName("CallBotsMain")
 
     let webConfig = WKWebViewConfiguration()
     webView = WKWebView(frame: window.contentView!.bounds, configuration: webConfig)
@@ -75,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     main.addItem(appItem)
     let appMenu = NSMenu()
     appMenu.addItem(
-      NSMenuItem(title: "Quit Aloqa Calls Sim",
+      NSMenuItem(title: "Quit Call Bots",
                  action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     appItem.submenu = appMenu
 

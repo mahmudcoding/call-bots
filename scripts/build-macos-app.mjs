@@ -1,4 +1,4 @@
-// Builds dist/Aloqa Calls Sim.app — a double-click macOS app that runs the
+// Builds dist/Call Bots.app — a double-click macOS app that runs the
 // dashboard with its own bundled Node runtime. macOS-only build (uses sips,
 // iconutil, codesign, ditto).
 import { execFileSync } from 'node:child_process'
@@ -10,8 +10,8 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 const NODE_VERSION = '22.12.0'
-const APP_NAME = 'Aloqa Calls Sim'
-const BUNDLE_ID = 'com.aloqa.calls-sim'
+const APP_NAME = 'Call Bots'
+const BUNDLE_ID = 'com.aloqa.call-bots'
 
 if (process.platform !== 'darwin') {
   console.error('the .app can only be built on macOS')
@@ -51,7 +51,7 @@ writeFileSync(
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
   <key>CFBundleVersion</key><string>${version}</string>
   <key>CFBundleShortVersionString</key><string>${version}</string>
-  <key>CFBundleExecutable</key><string>AloqaCallsSim</string>
+  <key>CFBundleExecutable</key><string>CallBots</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
@@ -73,7 +73,7 @@ run('swiftc', [
   '-O',
   '-swift-version', '5',
   '-target', `${arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos12.0`,
-  '-o', join(contents, 'MacOS', 'AloqaCallsSim'),
+  '-o', join(contents, 'MacOS', 'CallBots'),
   join(projectRoot, 'scripts', 'macos-app', 'main.swift'),
 ])
 
@@ -153,7 +153,7 @@ step('ad-hoc code signing')
 run('codesign', ['--force', '--deep', '--sign', '-', appRoot])
 
 step('zipping')
-const zipPath = join(dist, `AloqaCallsSim-${version}-${arch}.zip`)
+const zipPath = join(dist, `CallBots-${version}-${arch}.zip`)
 rmSync(zipPath, { force: true })
 run('ditto', ['-c', '-k', '--keepParent', appRoot, zipPath])
 
@@ -163,4 +163,4 @@ const du = execFileSync('du', ['-sk', appRoot]).toString().split('\t')[0]
 console.log(`\nbuilt: ${appRoot} (${(Number(du) / 1024).toFixed(0)} MB)`)
 console.log(`zip:   ${zipPath} (${sizeMb(statSync(zipPath).size)})`)
 console.log('\nnote: ad-hoc signed. Recipients of the zip must right-click → Open on first launch')
-console.log('(or: xattr -dr com.apple.quarantine "/Applications/Aloqa Calls Sim.app")')
+console.log('(or: xattr -dr com.apple.quarantine "/Applications/Call Bots.app")')
