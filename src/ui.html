@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calls Sim</title>
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #12151d; --card: #151924; --card-2: #1a1f2c;
+    --line: rgba(255,255,255,.08); --line-2: rgba(255,255,255,.14);
+    --text: #e9ecf4; --muted: #8b93a7; --faint: #5c6377;
+    --accent: #4f8cff; --accent-2: #6ea1ff;
+    --ok: #34d399; --warn: #fbbf24; --danger: #f87171;
+    --shadow: 0 10px 30px rgba(0,0,0,.35);
+    --r: 14px; --r-sm: 9px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(79,140,255,.09), transparent 60%),
+      radial-gradient(900px 400px at 10% 110%, rgba(52,211,153,.05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  input { font: inherit; color: inherit; }
+  ::selection { background: rgba(79,140,255,.35); }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 20px; height: 58px;
+    background: rgba(11,13,18,.82); backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 15px; letter-spacing: .2px; }
+  .brand .dot {
+    width: 22px; height: 22px; border-radius: 7px;
+    background: conic-gradient(from 210deg, #4f8cff, #34d399, #fbbf24, #4f8cff);
+    box-shadow: 0 0 14px rgba(79,140,255,.55);
+  }
+  .spacer { flex: 1; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    background: var(--card-2); color: var(--muted); border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .pill.-idle::before { background: var(--faint); }
+  .pill.-launching::before, .pill.-stopping::before, .pill.-joining::before, .pill.-leaving::before
+    { background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
+  .pill.-running::before, .pill.-in-call::before { background: var(--ok); }
+  .pill.-error::before { background: var(--danger); }
+  .pill.-ready::before, .pill.-created::before, .pill.-closed::before { background: var(--faint); }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 32px; padding: 0 12px; border-radius: var(--r-sm);
+    background: var(--card-2); border: 1px solid var(--line);
+    font-size: 12.5px; color: var(--muted); white-space: nowrap;
+  }
+  .chip b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .chip button { display: inline-flex; color: var(--muted); padding: 2px; border-radius: 5px; }
+  .chip button:hover { color: var(--text); background: rgba(255,255,255,.07); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    height: 34px; padding: 0 14px; border-radius: var(--r-sm);
+    background: var(--card-2); border: 1px solid var(--line-2);
+    font-weight: 600; font-size: 13px; transition: all .15s ease;
+  }
+  .btn:hover { background: #202636; border-color: rgba(255,255,255,.22); }
+  .btn.-accent { background: var(--accent); border-color: transparent; color: #fff; box-shadow: 0 6px 18px rgba(79,140,255,.35); }
+  .btn.-accent:hover { background: var(--accent-2); }
+  .btn.-danger { color: var(--danger); }
+  .btn.-danger:hover { background: rgba(248,113,113,.12); border-color: rgba(248,113,113,.4); }
+  .btn:disabled { opacity: .45; pointer-events: none; }
+
+  main { max-width: 1240px; margin: 0 auto; padding: 26px 20px 300px; }
+
+  /* ---------- launch panel ---------- */
+  #launch { max-width: 620px; margin: 6vh auto 0; }
+  .panel {
+    background: linear-gradient(180deg, rgba(255,255,255,.02), transparent 40%), var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow);
+    padding: 26px;
+  }
+  .panel h1 { font-size: 19px; font-weight: 650; margin-bottom: 4px; }
+  .panel .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+  .seg {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm);
+    padding: 4px; margin-bottom: 16px;
+  }
+  .seg button { padding: 9px; border-radius: 6px; color: var(--muted); font-weight: 600; font-size: 13px; transition: all .15s; }
+  .seg button.on { background: var(--card-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-2); }
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 7px; letter-spacing: .3px; text-transform: uppercase; }
+  .field input[type=text] {
+    width: 100%; height: 40px; padding: 0 12px; border-radius: var(--r-sm);
+    background: var(--card); border: 1px solid var(--line-2); outline: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+  }
+  .field input[type=text]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,140,255,.18); }
+  .users-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .uchip {
+    display: flex; align-items: center; gap: 10px; text-align: left;
+    padding: 10px 12px; border-radius: var(--r-sm);
+    background: var(--card); border: 1px solid var(--line-2); transition: all .13s;
+  }
+  .uchip:hover { border-color: rgba(255,255,255,.3); }
+  .uchip .swatch { width: 12px; height: 12px; border-radius: 4px; flex: none; }
+  .uchip .nm { font-weight: 600; font-size: 13px; }
+  .uchip .em { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .uchip .tick { margin-left: auto; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--faint); flex: none; transition: all .13s; }
+  .uchip.on { border-color: var(--accent); background: rgba(79,140,255,.08); }
+  .uchip.on .tick { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--panel); }
+  .opts { display: flex; gap: 18px; flex-wrap: wrap; margin: 18px 0 22px; }
+  .opt { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+  .opt .sw { width: 32px; height: 19px; border-radius: 999px; background: var(--card-2); border: 1px solid var(--line-2); position: relative; transition: all .15s; }
+  .opt .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--muted); transition: all .15s; }
+  .opt input { display: none; }
+  .opt input:checked + .sw { background: rgba(79,140,255,.35); border-color: var(--accent); }
+  .opt input:checked + .sw::after { left: 15px; background: #fff; }
+  .hint { font-size: 12px; color: var(--faint); margin-top: 10px; }
+  .hint.-warn { color: var(--warn); }
+  .cfg-error { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.35); color: var(--danger); border-radius: var(--r-sm); padding: 12px 14px; font-size: 13px; }
+
+  /* ---------- session view ---------- */
+  #sessionView { display: none; }
+  .banner {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: linear-gradient(90deg, rgba(52,211,153,.10), rgba(79,140,255,.08));
+    border: 1px solid rgba(52,211,153,.35); border-radius: var(--r);
+    padding: 14px 18px; margin-bottom: 18px;
+  }
+  .banner .ttl { font-weight: 650; }
+  .banner .url { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+  .allbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+  .allbar .lbl { font-size: 12px; font-weight: 650; color: var(--faint); text-transform: uppercase; letter-spacing: .4px; margin-right: 4px; }
+  .allbar .btn { height: 30px; padding: 0 11px; font-size: 12.5px; }
+  .allbar .stats { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
+    overflow: hidden; transition: border-color .15s, transform .15s; position: relative;
+  }
+  .card:hover { border-color: var(--line-2); }
+  .card .strip { height: 3px; }
+  .thumb { position: relative; aspect-ratio: 16/9; background: #0d1016; overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .skeleton {
+    position: absolute; inset: 0;
+    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,.05) 50%, transparent 70%) #0d1016;
+    background-size: 220% 100%; animation: shimmer 1.6s infinite;
+    display: grid; place-items: center; color: var(--faint); font-size: 12px;
+  }
+  @keyframes shimmer { to { background-position: -120% 0; } }
+  .thumb .pill { position: absolute; left: 10px; bottom: 10px; background: rgba(10,12,17,.78); backdrop-filter: blur(6px); }
+  .thumb .share-badge {
+    position: absolute; right: 10px; top: 10px;
+    display: none; align-items: center; gap: 5px;
+    background: rgba(79,140,255,.9); color: #fff; font-size: 11px; font-weight: 700;
+    padding: 3px 8px; border-radius: 999px;
+  }
+  .card.sharing .share-badge { display: inline-flex; }
+  .cbody { padding: 12px 14px 14px; }
+  .who { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .ava { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; flex: none; }
+  .who .nm { font-weight: 650; font-size: 14px; }
+  .who .em { color: var(--faint); font-size: 11.5px; }
+  .controls { display: flex; align-items: center; gap: 6px; }
+  .ibtn {
+    width: 34px; height: 34px; display: grid; place-items: center;
+    border-radius: var(--r-sm); border: 1px solid var(--line);
+    background: var(--card-2); color: var(--muted); transition: all .13s; position: relative;
+  }
+  .ibtn:hover { color: var(--text); border-color: var(--line-2); background: #202636; }
+  .ibtn.-off { color: var(--danger); border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.10); }
+  .ibtn.-live { color: var(--accent-2); border-color: rgba(79,140,255,.45); background: rgba(79,140,255,.12); }
+  .ibtn.-req { color: var(--warn); border-color: rgba(251,191,36,.4); background: rgba(251,191,36,.08); }
+  .ibtn:disabled { opacity: .35; pointer-events: none; }
+  .ibtn.busy { pointer-events: none; }
+  .ibtn.busy svg { opacity: 0; }
+  .ibtn.busy::after {
+    content: ""; position: absolute; width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,.2); border-top-color: var(--text);
+    border-radius: 50%; animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .controls .gap { flex: 1; }
+  .err { margin-top: 10px; color: var(--danger); font-size: 12px; display: none; }
+  .card.has-error .err { display: block; }
+
+  /* ---------- log drawer ---------- */
+  #logDrawer {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    background: rgba(13,15,21,.94); backdrop-filter: blur(12px);
+    border-top: 1px solid var(--line);
+    transform: translateY(calc(100% - 40px)); transition: transform .22s ease;
+  }
+  #logDrawer.open { transform: translateY(0); }
+  #logDrawer .bar { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 18px; cursor: pointer; user-select: none; }
+  #logDrawer .bar .ttl { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  #logDrawer .bar .last { color: var(--faint); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; font-family: ui-monospace, Menlo, monospace; }
+  #logDrawer .bar .chev { transition: transform .2s; color: var(--faint); }
+  #logDrawer.open .bar .chev { transform: rotate(180deg); }
+  #logBody { height: 230px; overflow-y: auto; padding: 4px 18px 14px; font: 11.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #logBody .t { color: var(--faint); }
+  #logBody .lb { font-weight: 700; }
+  #logBody .warn { color: var(--warn); }
+  #logBody .error { color: var(--danger); }
+
+  /* ---------- toasts ---------- */
+  #toasts { position: fixed; top: 68px; right: 18px; z-index: 40; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    display: flex; align-items: center; gap: 9px;
+    background: var(--card-2); border: 1px solid var(--line-2); border-radius: var(--r-sm);
+    padding: 10px 14px; font-size: 13px; max-width: 380px; box-shadow: var(--shadow);
+    animation: slidein .18s ease;
+  }
+  .toast.-ok { border-color: rgba(52,211,153,.5); }
+  .toast.-err { border-color: rgba(248,113,113,.5); }
+  .toast.-warn { border-color: rgba(251,191,36,.5); }
+  @keyframes slidein { from { transform: translateX(12px); opacity: 0; } }
+
+  #connBanner {
+    display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+    background: var(--danger); color: #16060a; font-weight: 700; font-size: 12.5px;
+    text-align: center; padding: 4px;
+  }
+  body.disconnected #connBanner { display: block; }
+</style>
+</head>
+<body>
+<div id="connBanner">dashboard disconnected — retrying…</div>
+
+<header>
+  <div class="brand"><div class="dot"></div>Calls Sim</div>
+  <span id="statusPill" class="pill -idle">idle</span>
+  <div class="spacer"></div>
+  <span id="countChip" class="chip" hidden>participants <b id="countVal">–</b></span>
+  <span id="callChip" class="chip" hidden>
+    <span id="callIdText" style="font-family:ui-monospace,Menlo,monospace"></span>
+    <button id="copyCall" title="Copy call URL">⧉</button>
+    <button id="openCall" title="Open call in your browser">↗</button>
+  </span>
+  <button id="stopBtn" class="btn -danger" hidden>Stop session</button>
+</header>
+
+<main>
+  <!-- ============ launch ============ -->
+  <section id="launch">
+    <div class="panel">
+      <h1>Launch a simulated session</h1>
+      <div class="sub">Each user is a real browser signed into staging, publishing live audio and video.</div>
+
+      <div id="cfgError" class="cfg-error" hidden></div>
+
+      <div id="launchForm">
+        <div class="seg">
+          <button id="modeJoin" class="on">Join existing call</button>
+          <button id="modeCreate">Create new call</button>
+        </div>
+
+        <div class="field" id="urlField">
+          <label>Call URL</label>
+          <input type="text" id="callUrl" placeholder="https://airion-cargo.store/w/…/call/…" spellcheck="false">
+        </div>
+        <div class="field" id="wsField" hidden>
+          <label>Workspace ID</label>
+          <input type="text" id="wsId" placeholder="WQASTGL05A1" spellcheck="false">
+        </div>
+
+        <div class="field">
+          <label>Simulated users</label>
+          <div class="users-grid" id="usersGrid"></div>
+          <div class="hint" id="userHint">Select who joins the call.</div>
+        </div>
+
+        <div class="opts">
+          <label class="opt"><input type="checkbox" id="optHeaded"><span class="sw"></span>Show browser windows</label>
+          <label class="opt"><input type="checkbox" id="optNoVideo"><span class="sw"></span>Join without camera</label>
+          <label class="opt"><input type="checkbox" id="optNoAudio"><span class="sw"></span>Join muted</label>
+        </div>
+
+        <button id="launchBtn" class="btn -accent" style="width:100%;height:42px;font-size:14px">Launch session</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ session ============ -->
+  <section id="sessionView">
+    <div class="banner" id="createdBanner" hidden>
+      <div>
+        <div class="ttl">Call is live — join from your own browser</div>
+        <div class="url" id="bannerUrl"></div>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn" id="bannerCopy">Copy URL</button>
+      <a class="btn -accent" id="bannerOpen" target="_blank" rel="noopener">Open call</a>
+    </div>
+
+    <div class="allbar">
+      <span class="lbl">All users</span>
+      <button class="btn" data-all="unmute">Unmute</button>
+      <button class="btn" data-all="mute">Mute</button>
+      <button class="btn" data-all="cam-on">Cams on</button>
+      <button class="btn" data-all="cam-off">Cams off</button>
+      <div class="stats">
+        <span class="chip" id="verifyChip" hidden>remote playing <b id="verifyVal">–</b></span>
+        <span class="chip" id="frozenChip" hidden>frozen <b id="frozenVal">0</b></span>
+      </div>
+    </div>
+
+    <div class="grid" id="cards"></div>
+  </section>
+</main>
+
+<div id="logDrawer">
+  <div class="bar" id="logBar">
+    <span class="ttl">Activity</span>
+    <span class="last" id="logLast"></span>
+    <button class="btn" id="logClear" style="height:26px;padding:0 10px;font-size:11.5px">Clear</button>
+    <span class="chev">▲</span>
+  </div>
+  <div id="logBody"></div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+'use strict'
+/* ---------- icons ---------- */
+const I = {
+  mic: '<svg width=16 height=16 viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><rect x=5.5 y=1.5 width=5 height=8.5 rx=2.5/><path d="M3 8a5 5 0 0 0 10 0M8 13v2"/></svg>',
+  micOff: '<svg width=16 height=16 viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><path d="M5.5 5.5v4a2.5 2.5 0 0 0 4.3 1.7M10.5 8V4a2.5 2.5 0 0 0-4.6-1.4M3 8a5 5 0 0 0 8.2 3.8M13 8a5 5 0 0 1-.6 2.4M8 13v2M2 2l12 12"/></svg>',
+  cam: '<svg width=16 height=16 viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><rect x=1.5 y=4 width=8.5 height=8 rx=2/><path d="M10 8.5l4.5-2.8v4.6L10 7.5"/></svg>',
+  camOff: '<svg width=16 height=16 viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><path d="M10 10.6V10a2 2 0 0 0 0-.4M10 6.5l4.5-2.8v4.6M4.6 4H8a2 2 0 0 1 2 2M1.5 6v4a2 2 0 0 0 2 2h4.9M2 2l12 12"/></svg>',
+  share: '<svg width=16 height=16 viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><rect x=1.5 y=2.5 width=13 height=9 rx=1.5/><path d="M5.5 14.5h5M8 11.5v3"/></svg>',
+  shot: '<svg width=16 height=16 viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><path d="M1.5 5.5a1.5 1.5 0 0 1 1.5-1.5h1.6L6 2.5h4L11.4 4H13a1.5 1.5 0 0 1 1.5 1.5V12A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12z"/><circle cx=8 cy=8.5 r=2.6/></svg>',
+  leave: '<svg width=16 height=16 viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><path d="M6.5 2H3.5A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14h3M11 11l3-3-3-3M14 8H6"/></svg>',
+  rejoin: '<svg width=16 height=16 viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><path d="M9.5 2h3A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-3M7 11l3-3-3-3M10 8H2"/></svg>',
+}
+
+/* ---------- helpers ---------- */
+const $ = (sel, root = document) => root.querySelector(sel)
+const el = (tag, cls, html) => {
+  const node = document.createElement(tag)
+  if (cls) node.className = cls
+  if (html !== undefined) node.innerHTML = html
+  return node
+}
+const esc = (s) => String(s ?? '').replace(/[&<>"]/gu, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+const toast = (msg, kind = '') => {
+  const t = el('div', `toast ${kind}`, esc(msg))
+  $('#toasts').append(t)
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 350) }, 4200)
+}
+const post = async (url, body) => {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.ok === false) throw new Error(data.error ?? `HTTP ${res.status}`)
+  return data
+}
+
+/* ---------- state ---------- */
+const S = {
+  mode: 'join',
+  selected: new Set(),
+  configUsers: [],
+  state: null,
+  cards: new Map(),
+  thumbTimer: null,
+  errorToasted: null,
+}
+
+/* ---------- launch panel ---------- */
+const setMode = (mode) => {
+  S.mode = mode
+  $('#modeJoin').classList.toggle('on', mode === 'join')
+  $('#modeCreate').classList.toggle('on', mode === 'create')
+  $('#urlField').hidden = mode !== 'join'
+  $('#wsField').hidden = mode !== 'create'
+}
+$('#modeJoin').onclick = () => setMode('join')
+$('#modeCreate').onclick = () => setMode('create')
+
+const renderUserChips = (users) => {
+  const grid = $('#usersGrid')
+  const sig = users.map((u) => u.slug).join(',')
+  if (grid.dataset.sig === sig) { updateUserHint(); return }
+  grid.dataset.sig = sig
+  grid.innerHTML = ''
+  if (S.selected.size === 0) users.slice(0, 4).forEach((u) => S.selected.add(u.slug))
+  for (const user of users) {
+    const chip = el('button', 'uchip', `
+      <span class="swatch" style="background:${esc(user.color)}"></span>
+      <span style="min-width:0"><div class="nm">${esc(user.label)}</div><div class="em">${esc(user.email)}</div></span>
+      <span class="tick"></span>`)
+    chip.classList.toggle('on', S.selected.has(user.slug))
+    chip.setAttribute('aria-label', `Toggle ${user.label}`)
+    chip.setAttribute('aria-pressed', String(S.selected.has(user.slug)))
+    chip.onclick = () => {
+      if (S.selected.has(user.slug)) S.selected.delete(user.slug)
+      else S.selected.add(user.slug)
+      chip.classList.toggle('on', S.selected.has(user.slug))
+      chip.setAttribute('aria-pressed', String(S.selected.has(user.slug)))
+      updateUserHint()
+    }
+    grid.append(chip)
+  }
+  updateUserHint()
+}
+const updateUserHint = () => {
+  const n = S.selected.size
+  const hint = $('#userHint')
+  if (n > 6) { hint.className = 'hint -warn'; hint.textContent = `${n} users — above ~6 concurrent publishers, CPU contention can degrade the media itself on a 16 GB Mac.` }
+  else { hint.className = 'hint'; hint.textContent = n === 0 ? 'Select who joins the call.' : `${n} user${n === 1 ? '' : 's'} selected.` }
+}
+
+$('#launchBtn').onclick = async () => {
+  try {
+    const body = {
+      mode: S.mode,
+      callUrl: $('#callUrl').value.trim(),
+      wsId: $('#wsId').value.trim(),
+      users: [...S.selected],
+      headed: $('#optHeaded').checked,
+      noVideo: $('#optNoVideo').checked,
+      noAudio: $('#optNoAudio').checked,
+    }
+    if (body.mode === 'join' && !/\/w\/[\w-]+\/calls?\/[\w-]+/u.test(body.callUrl)) {
+      throw new Error('paste the call URL: …/w/<workspace>/call/<id>')
+    }
+    if (body.users.length === 0) throw new Error('select at least one user')
+    $('#launchBtn').disabled = true
+    await post('/api/launch', body)
+    toast('Launching session…', '-ok')
+  } catch (error) {
+    toast(error.message, '-err')
+  } finally {
+    $('#launchBtn').disabled = false
+  }
+}
+
+/* ---------- stop (two-step confirm) ---------- */
+let stopArmed = null
+$('#stopBtn').onclick = async () => {
+  const btn = $('#stopBtn')
+  if (!stopArmed) {
+    btn.textContent = 'Confirm stop?'
+    stopArmed = setTimeout(() => { stopArmed = null; btn.textContent = 'Stop session' }, 3000)
+    return
+  }
+  clearTimeout(stopArmed); stopArmed = null
+  btn.textContent = 'Stop session'
+  await post('/api/stop').catch((error) => toast(error.message, '-err'))
+}
+
+/* ---------- session cards ---------- */
+const STATE_LABEL = { 'created': 'queued', 'ready': 'left', 'joining': 'joining', 'in-call': 'in call', 'leaving': 'leaving', 'closed': 'closed' }
+const pillFor = (state) => {
+  const base = state.startsWith('error') ? 'error' : state
+  return { text: STATE_LABEL[base] ?? base.replace('error:', 'error: '), cls: `-${base.startsWith('error') ? 'error' : base}` }
+}
+
+const buildCard = (user) => {
+  const card = el('div', 'card')
+  card.dataset.slug = user.slug
+  card.innerHTML = `
+    <div class="strip" style="background:${esc(user.color)}"></div>
+    <div class="thumb">
+      <div class="skeleton">waiting for browser…</div>
+      <img alt="" draggable="false" style="display:none">
+      <span class="pill">–</span>
+      <span class="share-badge">${I.share} sharing</span>
+    </div>
+    <div class="cbody">
+      <div class="who">
+        <div class="ava" style="background:${esc(user.color)}">${esc(user.label[0].toUpperCase())}</div>
+        <div style="min-width:0">
+          <div class="nm">${esc(user.label)}</div>
+          <div class="em">${esc(user.email)}</div>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="ibtn" data-act="mic" title="Toggle microphone">${I.mic}</button>
+        <button class="ibtn" data-act="cam" title="Toggle camera">${I.cam}</button>
+        <button class="ibtn" data-act="share" title="Toggle screen share">${I.share}</button>
+        <button class="ibtn" data-act="shot" title="Save screenshot">${I.shot}</button>
+        <span class="gap"></span>
+        <button class="ibtn" data-act="leave" title="Leave call">${I.leave}</button>
+      </div>
+      <div class="err"></div>
+    </div>`
+  for (const btn of card.querySelectorAll('[data-act]')) {
+    btn.onclick = () => runCardAction(user.slug, btn.dataset.act, btn)
+  }
+  return card
+}
+
+const runCardAction = async (slug, act, btn) => {
+  const user = (S.state?.session?.users ?? []).find((u) => u.slug === slug)
+  if (!user) return
+  let action = act
+  if (act === 'mic') action = user.mic === 'off' ? 'unmute' : 'mute'
+  if (act === 'cam') action = user.cam === 'off' ? 'cam-on' : 'cam-off'
+  if (act === 'share') action = user.sharing ? 'share-stop' : 'share'
+  if (act === 'leave') action = user.state === 'in-call' ? 'leave' : 'rejoin'
+  btn.classList.add('busy')
+  try {
+    const { results } = await post('/api/action', { slug, action })
+    const result = results[user.label]
+    if (action === 'share' && result === 'requested') {
+      toast(`${user.label}: share needs host approval — approve in the host UI, then try again`, '-warn')
+    } else if (action === 'shot') {
+      toast(`Screenshot saved: ${result}`, '-ok')
+    } else if (result === 'request') {
+      toast(`${user.label}: device is host-restricted (request mode)`, '-warn')
+    }
+  } catch (error) {
+    toast(`${user.label}: ${error.message}`, '-err')
+  } finally {
+    btn.classList.remove('busy')
+  }
+}
+
+for (const btn of document.querySelectorAll('[data-all]')) {
+  btn.onclick = async () => {
+    btn.disabled = true
+    try { await post('/api/action', { slug: 'all', action: btn.dataset.all }) }
+    catch (error) { toast(error.message, '-err') }
+    finally { btn.disabled = false }
+  }
+}
+
+const updateCard = (user) => {
+  let card = S.cards.get(user.slug)
+  if (!card) {
+    card = buildCard(user)
+    S.cards.set(user.slug, card)
+    $('#cards').append(card)
+  }
+  const pill = pillFor(user.state)
+  const pillEl = $('.thumb .pill', card)
+  pillEl.textContent = pill.text
+  pillEl.className = `pill ${pill.cls}`
+  card.classList.toggle('sharing', user.sharing)
+  card.classList.toggle('has-error', Boolean(user.lastError) && user.state.startsWith('error'))
+  $('.err', card).textContent = user.lastError ?? ''
+
+  const micBtn = $('[data-act=mic]', card)
+  micBtn.innerHTML = user.mic === 'off' ? I.micOff : I.mic
+  micBtn.className = `ibtn${user.mic === 'off' ? ' -off' : ''}${user.mic === 'request' ? ' -req' : ''}${micBtn.classList.contains('busy') ? ' busy' : ''}`
+  micBtn.disabled = user.state !== 'in-call'
+
+  const camBtn = $('[data-act=cam]', card)
+  camBtn.innerHTML = user.cam === 'off' ? I.camOff : I.cam
+  camBtn.className = `ibtn${user.cam === 'off' ? ' -off' : ''}${user.cam === 'request' ? ' -req' : ''}${camBtn.classList.contains('busy') ? ' busy' : ''}`
+  camBtn.disabled = user.state !== 'in-call'
+
+  const shareBtn = $('[data-act=share]', card)
+  shareBtn.className = `ibtn${user.sharing ? ' -live' : ''}${shareBtn.classList.contains('busy') ? ' busy' : ''}`
+  shareBtn.disabled = user.state !== 'in-call'
+
+  $('[data-act=shot]', card).disabled = !['in-call', 'joining', 'ready'].includes(user.state)
+
+  const leaveBtn = $('[data-act=leave]', card)
+  leaveBtn.innerHTML = user.state === 'in-call' ? I.leave : I.rejoin
+  leaveBtn.title = user.state === 'in-call' ? 'Leave call' : 'Rejoin call'
+  leaveBtn.disabled = !['in-call', 'ready'].includes(user.state)
+}
+
+/* ---------- thumbnails ---------- */
+const refreshThumbs = () => {
+  const users = S.state?.session?.users ?? []
+  users.forEach((user, i) => {
+    if (['created', 'closed'].includes(user.state)) return
+    const card = S.cards.get(user.slug)
+    if (!card) return
+    setTimeout(() => {
+      const img = $('.thumb img', card)
+      const probe = new Image()
+      probe.onload = () => {
+        img.src = probe.src
+        img.style.display = 'block'
+        $('.thumb .skeleton', card).style.display = 'none'
+      }
+      probe.src = `/api/thumb/${encodeURIComponent(user.slug)}?t=${Date.now()}`
+    }, i * 300)
+  })
+}
+
+/* ---------- render ---------- */
+const render = (state) => {
+  S.state = state
+  const active = state.status !== 'idle'
+
+  const pill = $('#statusPill')
+  pill.textContent = state.status
+  pill.className = `pill -${state.status}`
+
+  $('#stopBtn').hidden = !active
+  $('#launch').style.display = active ? 'none' : ''
+  $('#sessionView').style.display = active ? 'block' : 'none'
+
+  if (state.lastRunError && state.lastRunError !== S.errorToasted) {
+    S.errorToasted = state.lastRunError
+    toast(state.lastRunError, '-err')
+  }
+
+  // launch panel
+  if (!active) {
+    if (state.config?.ok) {
+      $('#cfgError').hidden = true
+      $('#launchForm').style.display = ''
+      S.configUsers = state.config.users
+      renderUserChips(state.config.users)
+      const ws = $('#wsId')
+      if (!ws.value && state.config.workspace) ws.value = state.config.workspace
+    } else if (state.config) {
+      $('#cfgError').hidden = false
+      $('#cfgError').textContent = state.config.error
+      $('#launchForm').style.display = 'none'
+    }
+    if (S.cards.size) { S.cards.clear(); $('#cards').innerHTML = '' }
+    $('#callChip').hidden = true
+    $('#countChip').hidden = true
+    return
+  }
+
+  // session view
+  const session = state.session
+  if (session) {
+    for (const user of session.users) updateCard(user)
+    const banner = $('#createdBanner')
+    if (session.createdCall && session.callUrl) {
+      banner.hidden = false
+      $('#bannerUrl').textContent = session.callUrl
+      $('#bannerOpen').href = session.callUrl
+    } else banner.hidden = true
+
+    const chip = $('#callChip')
+    if (session.callId) {
+      chip.hidden = false
+      $('#callIdText').textContent = session.callId
+      chip.dataset.url = session.callUrl ?? ''
+    } else chip.hidden = true
+  }
+
+  const verify = state.verify
+  if (verify) {
+    $('#countChip').hidden = verify.participantCount === null
+    $('#countVal').textContent = verify.participantCount ?? '–'
+    if (verify.remote) {
+      $('#verifyChip').hidden = false
+      $('#verifyVal').textContent = `${verify.remote.remotePlaying}/${verify.remote.remote}`
+      $('#frozenChip').hidden = verify.remote.frozen === 0
+      $('#frozenVal').textContent = verify.remote.frozen
+    }
+  }
+}
+
+/* ---------- call chip actions ---------- */
+const copyText = async (text, btn) => {
+  try { await navigator.clipboard.writeText(text) } catch { /* http clipboard fallback */
+    const ta = el('textarea'); ta.value = text; document.body.append(ta); ta.select()
+    document.execCommand('copy'); ta.remove()
+  }
+  const old = btn.textContent
+  btn.textContent = '✓'
+  setTimeout(() => { btn.textContent = old }, 1200)
+}
+$('#copyCall').onclick = () => copyText($('#callChip').dataset.url, $('#copyCall'))
+$('#openCall').onclick = () => window.open($('#callChip').dataset.url, '_blank')
+$('#bannerCopy').onclick = () => copyText($('#bannerUrl').textContent, $('#bannerCopy'))
+
+/* ---------- log drawer ---------- */
+$('#logBar').onclick = (event) => {
+  if (event.target.id === 'logClear') return
+  $('#logDrawer').classList.toggle('open')
+}
+$('#logClear').onclick = () => { $('#logBody').innerHTML = ''; $('#logLast').textContent = '' }
+const LABEL_COLORS = ['#6ea1ff', '#fbbf24', '#f472b6', '#34d399', '#a78bfa', '#f87171', '#22d3ee', '#facc15']
+const labelColor = (label) => {
+  let hash = 0
+  for (const ch of label) hash = (hash * 31 + ch.charCodeAt(0)) | 0
+  return LABEL_COLORS[Math.abs(hash) % LABEL_COLORS.length]
+}
+const addLog = (entry) => {
+  const body = $('#logBody')
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 30
+  const time = new Date(entry.at).toTimeString().slice(0, 8)
+  const line = el('div', entry.level !== 'info' ? entry.level : '',
+    `<span class="t">${time}</span> <span class="lb" style="color:${labelColor(entry.label)}">[${esc(entry.label)}]</span> ${esc(entry.text)}`)
+  body.append(line)
+  while (body.children.length > 400) body.firstChild.remove()
+  if (atBottom) body.scrollTop = body.scrollHeight
+  $('#logLast').textContent = `[${entry.label}] ${entry.text}`
+}
+
+/* ---------- SSE ---------- */
+const connect = () => {
+  const es = new EventSource('/api/events')
+  es.onopen = () => document.body.classList.remove('disconnected')
+  es.onerror = () => document.body.classList.add('disconnected')
+  es.onmessage = (event) => {
+    const msg = JSON.parse(event.data)
+    if (msg.type === 'state') render(msg.state)
+    else if (msg.type === 'log') addLog(msg.entry)
+  }
+}
+connect()
+setMode('join')
+S.thumbTimer = setInterval(refreshThumbs, 3000)
+</script>
+</body>
+</html>
