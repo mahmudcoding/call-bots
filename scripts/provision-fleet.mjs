@@ -18,7 +18,7 @@ const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`)
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback
 }
-const COUNT = Number(arg('count', '100'))
+const COUNT = Number(arg('count', '10'))
 const PACE_MS = Number(arg('pace', '1500'))
 const PASSWORD = 'password'
 
