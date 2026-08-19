@@ -5,6 +5,12 @@
 // selectors, same join sequence, same inverted aria-pressed device toggles.
 
 const JOIN_TIMEOUT = 60_000
+// A call on "Wait for admission" parks guests until a host clicks Admit, which
+// takes as long as it takes someone to notice. Giving up on the direct-entry
+// timeout abandons a bot that is sitting in the lobby doing exactly the right
+// thing — and it gets admitted later anyway, leaving it in the call with the
+// app believing it failed.
+const ADMISSION_TIMEOUT = 600_000
 const TOGGLE_TIMEOUT = 8_000
 
 export const SEL = {
@@ -47,7 +53,7 @@ const parse = (url) => {
 }
 
 // Bots join as guests, which have no lobby: name form -> call surface.
-const join = async ({ page, target, displayName, fail }) => {
+const join = async ({ page, target, displayName, log, fail }) => {
   await page.goto(target.url, { waitUntil: 'domcontentloaded' })
 
   const nameField = page.locator(SEL.guestName)
@@ -67,19 +73,36 @@ const join = async ({ page, target, displayName, fail }) => {
   await submit.waitFor({ state: 'visible', timeout: 10_000 })
   await submit.click()
 
-  try {
-    await page.locator(SEL.guestSurface).waitFor({ state: 'visible', timeout: JOIN_TIMEOUT })
-  } catch {
-    const waiting = await page
-      .getByText(/Waiting for approval/iu)
-      .isVisible()
-      .catch(() => false)
-    await fail(
-      'join',
-      waiting
-        ? 'waiting for host approval — admit the bot, or use a call with entry mode Open'
-        : 'the call never opened after submitting the name',
-    )
+  // Entry mode Open lets a guest straight in; Wait for admission parks it. Watch
+  // for the call surface, the lobby, and a refusal together, and stretch the
+  // deadline once the lobby is confirmed.
+  const surface = page.locator(SEL.guestSurface)
+  const lobby = page.getByText(/Waiting for approval/iu)
+  const startedAt = Date.now()
+  let admitted = false
+  let inLobby = false
+  while (!admitted) {
+    if (await surface.isVisible().catch(() => false)) {
+      admitted = true
+      break
+    }
+    if (await blocked.isVisible().catch(() => false)) {
+      const why = ((await blocked.textContent().catch(() => '')) ?? '').trim().slice(0, 120)
+      await fail('blocked', `join refused: ${why}`)
+    }
+    if (!inLobby && (await lobby.isVisible().catch(() => false))) {
+      inLobby = true
+      log.info('in the lobby — waiting to be admitted')
+    }
+    if (Date.now() - startedAt > (inLobby ? ADMISSION_TIMEOUT : JOIN_TIMEOUT)) {
+      await fail(
+        'join',
+        inLobby
+          ? 'nobody admitted the bot — admit it in the call, or use entry mode Open'
+          : 'the call never opened after submitting the name',
+      )
+    }
+    await page.waitForTimeout(500)
   }
 
   // /guest/meeting/<id> — the only place the meeting id is exposed to us
@@ -161,6 +184,8 @@ export default {
     }, SEL),
 
   leave: async ({ page, log }) => {
+    // Called for every bot on teardown, including ones that never got in.
+    if (!(await page.locator(SEL.leaveButton).isVisible().catch(() => false))) return
     await page.locator(SEL.leaveButton).click({ timeout: 5000 })
     const confirm = page.locator(SEL.leaveConfirm)
     const appeared = await confirm

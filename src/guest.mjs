@@ -70,18 +70,49 @@ export class Guest {
     this.meetingId = callId ?? null
     this.state = 'in-call'
 
-    // Devices start off, so a bot only publishes what it was sent in with. The
-    // clips stay attached either way, so a camera switched on later still shows
-    // real footage rather than Chrome's default pattern.
+    // Set both devices to what was asked for rather than assuming a bot arrives
+    // with them off: coming through an admission lobby it may not, and a bot
+    // sent in muted that quietly publishes audio is worse than one that fails.
+    // The clips stay attached either way, so a camera switched on later still
+    // shows real footage rather than Chrome's default pattern.
     if (platform.armAfterJoin) {
-      if (!this.options.noVideo && this.options.startCam !== false) {
-        await this.setCam(true).catch(() => 'unknown')
+      if (!this.options.noVideo) {
+        await this.setCam(this.options.startCam !== false).catch(() => 'unknown')
       }
-      if (!this.options.noAudio && this.options.startMic !== false) {
-        await this.setMic(true).catch(() => 'unknown')
+      if (!this.options.noAudio) {
+        await this.setMic(this.options.startMic !== false).catch(() => 'unknown')
       }
+      await this.#settleDevices()
     }
     this.log.info('in call')
+  }
+
+  // Aloqa can switch a guest's microphone on by itself as the connection
+  // finishes, landing after we have already set what was asked for — so a bot
+  // sent in muted starts publishing a moment later. Re-assert until it sticks.
+  async #settleDevices() {
+    const wantCam = this.options.startCam !== false
+    const wantMic = this.options.startMic !== false
+    let corrected = false
+    for (let round = 0; round < 3; round += 1) {
+      await this.page.waitForTimeout(1500)
+      const [mic, cam] = await Promise.all([
+        this.micState().catch(() => 'unknown'),
+        this.camState().catch(() => 'unknown'),
+      ])
+      let drifted = false
+      if (!this.options.noAudio && mic !== 'unknown' && mic !== (wantMic ? 'on' : 'off')) {
+        await this.setMic(wantMic).catch(() => {})
+        drifted = true
+      }
+      if (!this.options.noVideo && cam !== 'unknown' && cam !== (wantCam ? 'on' : 'off')) {
+        await this.setCam(wantCam).catch(() => {})
+        drifted = true
+      }
+      if (!drifted) break
+      corrected = true
+    }
+    if (corrected) this.log.warn('the call changed this bot\'s devices after joining — set them back')
   }
 
   // --- in-call devices ------------------------------------------------------
@@ -108,8 +139,24 @@ export class Guest {
     return this.platform.remote(this.page)
   }
 
+  // A bot that gave up waiting and was admitted afterwards is in the call, so
+  // its controls have to work again. Cheap to check and only asked about bots
+  // that are not already in.
+  async recoverIfAdmitted() {
+    if (!this.platform || !this.page || this.state === 'in-call') return
+    if (!String(this.state).startsWith('error:join')) return
+    const summary = await this.platform.remote(this.page).catch(() => null)
+    if (!summary || summary.local === 0) return
+    this.log.info('admitted after all — back in the call')
+    this.state = 'in-call'
+    this.lastError = null
+  }
+
   async leave() {
-    if (this.state !== 'in-call') return
+    // Never trust our own record here: a bot admitted after it timed out is
+    // really in the call, and closing its browser without leaving strands it
+    // there as a participant nobody can remove.
+    if (!this.platform || !this.page) return
     this.state = 'leaving'
     try {
       await this.platform.leave(this.#ctx())
@@ -126,7 +173,7 @@ export class Guest {
   async teardown() {
     if (!this.browser) return
     try {
-      if (this.state === 'in-call') await this.leave()
+      await this.leave()
     } catch (error) {
       this.log.warn(`teardown failed: ${error.message}`)
     }

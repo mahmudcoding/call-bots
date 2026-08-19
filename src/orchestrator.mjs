@@ -5,7 +5,21 @@ import { plain as log } from './log.mjs'
 import { concurrencyWarning } from './machine.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
 
-const JOIN_CONCURRENCY = 2
+// Launching browsers is the heavy part, so it stays paced. Waiting to be
+// admitted is not, and must never hold a lane: a host running "Wait for
+// admission" has to see every request at once, not two at a time with the rest
+// queued behind them.
+const LAUNCH_CONCURRENCY = 2
+
+const PROBE_TIMEOUT = 4000
+
+// Resolves to `fallback` rather than hanging when a browser is too busy to
+// answer. A slow bot should show as unknown, not freeze the whole window.
+const bounded = (promise, fallback) =>
+  Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), PROBE_TIMEOUT)),
+  ])
 
 const pool = async (items, worker, concurrency) => {
   const queue = [...items]
@@ -90,15 +104,36 @@ export class Roster {
     this.guests.push(...guests)
     this.#manifest()
 
-    const failures = await pool(
+    const failures = []
+    const failed = (guest, error) => {
+      guest.lastError = error.message
+      failures.push({ item: guest, error })
+    }
+
+    const launched = []
+    await pool(
       guests,
       async (guest) => {
         guest.log.info('launching browser')
-        await guest.start()
-        await guest.join(this.target)
-        this.meetingId ??= guest.meetingId
+        try {
+          await guest.start()
+          launched.push(guest)
+        } catch (error) {
+          failed(guest, error)
+        }
       },
-      JOIN_CONCURRENCY,
+      LAUNCH_CONCURRENCY,
+    )
+
+    await Promise.all(
+      launched.map(async (guest) => {
+        try {
+          await guest.join(this.target)
+          this.meetingId ??= guest.meetingId
+        } catch (error) {
+          failed(guest, error)
+        }
+      }),
     )
     for (const { item, error } of failures) item.log.error(error.message)
     this.#manifest()
@@ -116,21 +151,34 @@ export class Roster {
     return true
   }
 
+  // Asking each bot in turn costs a round trip per bot per poll, which stops
+  // answering at all once there are enough of them on a busy machine. Ask them
+  // all at once, and never let one stuck browser hold up the answer.
   async statusData() {
-    const guests = []
-    for (const [i, guest] of this.guests.entries()) {
-      const inCall = guest.state === 'in-call'
-      guests.push({
-        index: i,
-        slug: guest.user.slug,
-        label: guest.label,
-        color: guestColorHex((guest.user.n - 1) % THEME_COUNT),
-        state: guest.state,
-        mic: inCall ? await guest.micState().catch(() => 'unknown') : null,
-        cam: inCall ? await guest.camState().catch(() => 'unknown') : null,
-        lastError: guest.lastError,
-      })
-    }
+    const guests = await Promise.all(
+      this.guests.map(async (guest, i) => {
+        // A bot admitted after it stopped waiting is in the call whatever we
+        // recorded, and its controls have to come back to life.
+        await bounded(guest.recoverIfAdmitted(), null)
+        const inCall = guest.state === 'in-call'
+        const [mic, cam] = inCall
+          ? await Promise.all([
+              bounded(guest.micState(), 'unknown'),
+              bounded(guest.camState(), 'unknown'),
+            ])
+          : [null, null]
+        return {
+          index: i,
+          slug: guest.user.slug,
+          label: guest.label,
+          color: guestColorHex((guest.user.n - 1) % THEME_COUNT),
+          state: guest.state,
+          mic,
+          cam,
+          lastError: guest.lastError,
+        }
+      }),
+    )
     return { meetingId: this.meetingId, inviteLink: this.callUrl, platform: this.platform, guests }
   }
 
