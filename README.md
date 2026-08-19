@@ -22,6 +22,22 @@ npm start          # opens the app at http://127.0.0.1:4610
 machine can carry. On macOS, `npm run build:app` produces a double-click
 **Call Bots.app** (bundled Node runtime, no terminal needed).
 
+## Sharing the app
+
+`npm run build:app` also writes `dist/CallBots-<version>-<arch>.zip`, which is
+everything a recipient needs — Node, the footage, the voices. They do not need
+Node, ffmpeg, or this repository.
+
+- **Apple Silicon only.** The bundled Node and the native shell are built for
+  the machine that ran the build. An Intel Mac needs its own x64 build.
+- **macOS 12 or newer.**
+- **First launch:** the app is ad-hoc signed, so macOS blocks a double-click.
+  Right-click the app and choose Open, or run
+  `xattr -dr com.apple.quarantine "/Applications/Call Bots.app"`.
+- **First run downloads Chromium** (about 150 MB) and shows progress in the
+  window. After that it works offline.
+- How many bots a machine can carry is measured from its own RAM and cores.
+
 ## Using it
 
 1. Start a call in Aloqa and copy its **invite link** (the "Add to call" panel).
