@@ -25,7 +25,7 @@ const pool = async (items, worker, concurrency) => {
   return failures
 }
 
-// Holds every guest of one call and the run-owned resources behind them.
+// Holds every bot of one call and the run-owned resources behind them.
 export class Roster {
   constructor(options) {
     this.options = options
@@ -62,7 +62,7 @@ export class Roster {
     return this.guests.find((guest) => guest.user.slug === slug) ?? null
   }
 
-  // Sends `count` more guests into the call. The first call sets the token.
+  // Sends `count` more bots into the call. The first call sets the token.
   async add(count, token = null) {
     if (token) this.token = token
     if (!this.token) throw new Error('no invite link — paste the call\'s invite link first')
@@ -74,9 +74,9 @@ export class Roster {
     const batch = Array.from({ length: count }, () => {
       this.counter += 1
       const n = this.counter
-      return { n, index: n - 1, label: `Guest ${n}`, slug: `guest-${n}` }
+      return { n, index: n - 1, label: `Bot ${n}`, slug: `bot-${n}` }
     })
-    log.info(`preparing ${batch.length} guest(s)`)
+    log.info(`preparing ${batch.length} bot(s)`)
     const media = await ensureGuestFixtures(batch, this.options)
     const guests = batch.map((guest) => new Guest(guest, media.get(guest.slug), this.options))
     this.guests.push(...guests)
@@ -97,7 +97,7 @@ export class Roster {
     return { added: guests.length - failures.length, failed: failures.length }
   }
 
-  // A guest that leaves is gone: close its browser and drop it from the roster
+  // A bot that leaves is gone: close its browser and drop it from the roster
   // so nothing lingers in the window.
   async remove(slug) {
     const guest = this.bySlug(slug)
@@ -126,7 +126,7 @@ export class Roster {
     return { meetingId: this.meetingId, inviteLink: this.callUrl, guests }
   }
 
-  // One guest checks that the other tiles really render — buttons are not proof.
+  // One bot checks that the other tiles really render — buttons are not proof.
   async verifyData() {
     const verifier = this.inCall()[0]
     if (!verifier) return null
@@ -137,7 +137,7 @@ export class Roster {
   async teardownAll() {
     if (this.tearingDown) return
     this.tearingDown = true
-    log.info('closing guests…')
+    log.info('closing bots…')
     await Promise.all(
       this.guests.map((guest) =>
         Promise.race([

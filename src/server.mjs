@@ -161,11 +161,11 @@ const startSession = async (body) => {
       const result = await roster.add(count, token)
       session.status = roster.inCall().length > 0 ? 'running' : 'idle'
       if (roster.inCall().length === 0) {
-        session.lastError = 'no guest reached the call'
+        session.lastError = 'no bot reached the call'
         await roster.teardownAll().catch(() => {})
         session.roster = null
       } else if (result.failed) {
-        log.warn(`${result.failed} guest(s) failed to join`)
+        log.warn(`${result.failed} bot(s) failed to join`)
       }
     } catch (error) {
       log.error(error.message)
@@ -193,7 +193,7 @@ const runAction = async (slug, action) => {
   const roster = session.roster
   if (!roster || session.status !== 'running') throw new Error('no running session')
   const targets = slug === 'all' ? roster.inCall() : [roster.bySlug(slug)].filter(Boolean)
-  if (targets.length === 0) throw new Error(`no guest for "${slug}"`)
+  if (targets.length === 0) throw new Error(`no bot for "${slug}"`)
   const results = {}
   for (const guest of targets) {
     switch (action) {

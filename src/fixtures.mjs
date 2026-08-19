@@ -60,7 +60,7 @@ export const ensureGuestFixtures = async (guests, options = {}) => {
 
   const result = new Map()
   for (const guest of guests) {
-    const audio = join(fixturesDir, `guest-${guest.n}.wav`)
+    const audio = join(fixturesDir, `bot-${guest.n}.wav`)
     if (!existsSync(audio)) {
       const line = LINES[(guest.n - 1) % LINES.length]
       const voice = voices.length ? voices[(guest.n - 1) % voices.length] : null

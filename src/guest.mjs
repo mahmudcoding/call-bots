@@ -47,7 +47,7 @@ export class Guest {
     )
   }
 
-  // Guests never see a lobby: name form -> (waiting room) -> call surface.
+  // Bots join as guests, which have no lobby: name form -> call surface.
   async join(token) {
     this.state = 'joining'
     await this.page.goto(guestJoinPath(token), { waitUntil: 'domcontentloaded' })
@@ -79,7 +79,7 @@ export class Guest {
       await this.#fail(
         'join',
         waiting
-          ? 'waiting for host approval — admit the guest, or use a call with entry mode Open'
+          ? 'waiting for host approval — admit the bot, or use a call with entry mode Open'
           : 'the call never opened after submitting the name',
       )
     }

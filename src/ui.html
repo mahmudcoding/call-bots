@@ -118,7 +118,7 @@
   }
   .empty b { color: var(--text); font-size: 15px; font-weight: 650; }
 
-  /* ---------- guest cards ---------- */
+  /* ---------- bot cards ---------- */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 16px; }
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
@@ -201,14 +201,14 @@
         <input type="text" id="link" placeholder="paste invite link" spellcheck="false">
       </div>
       <div class="count">
-        <div class="lbl">Guests</div>
+        <div class="lbl">Bots</div>
         <input type="number" id="count" min="1" max="50" value="2">
       </div>
-      <button id="goBtn" class="btn -accent go">Send guests</button>
+      <button id="goBtn" class="btn -accent go">Send bots</button>
     </div>
 
     <div class="allbar" id="allbar" hidden>
-      <span class="lead">All guests</span>
+      <span class="lead">All bots</span>
       <button class="btn" data-all="unmute">Unmute</button>
       <button class="btn" data-all="mute">Mute</button>
       <button class="btn" data-all="cam-on">Cameras on</button>
@@ -216,8 +216,8 @@
     </div>
 
     <div class="empty" id="empty">
-      <b id="emptyTitle">No guests in a call yet</b>
-      <span id="emptyText">Paste the invite link, choose how many guests, and send them in.</span>
+      <b id="emptyTitle">No bots in a call yet</b>
+      <span id="emptyText">Paste the invite link, choose how many bots, and send them in.</span>
     </div>
 
     <div class="grid" id="cards"></div>
@@ -262,7 +262,7 @@ const post = async (url, body) => {
 
 const S = { state: null, cards: new Map(), errorShown: null }
 
-/* ---------- send guests (starts the session, or adds to it) ---------- */
+/* ---------- send bots (starts the session, or adds to it) ---------- */
 $('#goBtn').onclick = async () => {
   const btn = $('#goBtn')
   const guests = Math.max(1, Number($('#count').value) || 1)
@@ -273,7 +273,7 @@ $('#goBtn').onclick = async () => {
   try {
     if (running) {
       const res = await post('/api/add', { guests })
-      toast(`${res.added} guest(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
+      toast(`${res.added} bot(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
     } else {
       await post('/api/start', { link: $('#link').value.trim(), guests })
     }
@@ -308,7 +308,7 @@ for (const btn of document.querySelectorAll('[data-all]')) {
   }
 }
 
-/* ---------- guest cards ---------- */
+/* ---------- bot cards ---------- */
 const buildCard = (guest) => {
   const card = el('div', 'card')
   card.dataset.slug = guest.slug
@@ -330,7 +330,7 @@ const buildCard = (guest) => {
         <button class="ibtn" data-act="mic" title="Toggle microphone">${I.mic}</button>
         <button class="ibtn" data-act="cam" title="Toggle camera">${I.cam}</button>
         <span class="gap"></span>
-        <button class="ibtn" data-act="leave" title="Remove this guest">${I.leave}</button>
+        <button class="ibtn" data-act="leave" title="Remove this bot">${I.leave}</button>
       </div>
       <div class="err"></div>
     </div>`
@@ -423,7 +423,7 @@ const render = (state) => {
 
   $('#stopBtn').hidden = !running
   $('#allbar').hidden = !running
-  $('#goBtn').textContent = running ? 'Add guests' : 'Send guests'
+  $('#goBtn').textContent = running ? 'Add bots' : 'Send bots'
   $('#goBtn').disabled = busy
   // the link belongs to the live call, so it is fixed for the session
   $('#link').disabled = running || busy
@@ -439,15 +439,15 @@ const render = (state) => {
   if (state.browserInstalling) {
     $('#emptyTitle').textContent = 'Getting the browser ready'
     $('#emptyText').textContent = state.browserProgress
-      ? `Downloading Chromium — ${state.browserProgress}. Guests can join as soon as it lands.`
-      : 'Downloading Chromium (one-time, about 175 MB). Guests can join as soon as it lands.'
+      ? `Downloading Chromium — ${state.browserProgress}. Bots can join as soon as it lands.`
+      : 'Downloading Chromium (one-time, about 175 MB). Bots can join as soon as it lands.'
     $('#goBtn').disabled = true
   } else if (!state.browserReady) {
     $('#emptyTitle').textContent = 'No browser available'
     $('#emptyText').textContent = 'Install Google Chrome, or run: npx playwright install chromium'
   } else {
-    $('#emptyTitle').textContent = 'No guests in a call yet'
-    $('#emptyText').textContent = 'Paste the invite link, choose how many guests, and send them in.'
+    $('#emptyTitle').textContent = 'No bots in a call yet'
+    $('#emptyText').textContent = 'Paste the invite link, choose how many bots, and send them in.'
   }
 
   const guests = state.session?.guests ?? []
