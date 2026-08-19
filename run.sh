@@ -184,16 +184,17 @@ if [ "$CHECK_ONLY" = 1 ]; then
   ok "ready — rerun with --link to send bots in"
   exit 0
 fi
-[ -n "$LINK" ] || die "--link is required (the call's invite link)"
-
 cd "$ROOT"
 if [ "$MODE" = ui ]; then
+  # The dashboard asks for the link in the window, so it needs none up front.
   printf '\n'
   say "dashboard on http://127.0.0.1:$PORT — it binds to localhost only"
   say "reach it with:  ssh -L $PORT:127.0.0.1:$PORT <user>@<this-server>"
   printf '\n'
   exec node src/cli.mjs ui --port "$PORT" --no-open
 fi
+
+[ -n "$LINK" ] || die "--link is required (the call's invite link)"
 
 printf '\n'
 say "sending $BOTS bot(s) — camera $CAMERA, mic $MIC"
