@@ -370,10 +370,9 @@
         <div class="field" style="margin-bottom:0">
           <label>Simulated users</label>
           <div class="users-toolbar">
-            <input type="search" id="userSearch" placeholder="Filter users…" spellcheck="false">
-            <input type="number" id="pickCount" min="1" title="Select the first N users"
-                   style="width:66px;height:32px;padding:0 9px;border-radius:9px;background:var(--card);border:1px solid var(--line-2);outline:none;font-size:13px">
-            <button class="quick" id="pickFirst">Select first</button>
+            <input type="number" id="pickCount" min="1" placeholder="How many users to select"
+                   style="flex:1;min-width:0;height:32px;padding:0 12px;border-radius:9px;background:var(--card);border:1px solid var(--line-2);outline:none;font-size:13px">
+            <button class="quick" id="pickFirst">Select</button>
             <button class="quick" data-pick="all">All</button>
             <button class="quick" data-pick="none">None</button>
           </div>
@@ -503,22 +502,12 @@ const S = {
 }
 
 /* ---------- launch panel ---------- */
-const applyUserFilter = () => {
-  const q = ($('#userSearch').value || '').trim().toLowerCase()
-  for (const chip of document.querySelectorAll('#usersGrid .uchip')) {
-    chip.style.display = !q || chip.dataset.search.includes(q) ? '' : 'none'
-  }
-}
-$('#userSearch').oninput = applyUserFilter
-
-// Selection always applies to what is currently visible, so filtering first
-// then "Select first N" picks the first N matches, not the first N overall.
 const applySelection = (take) => {
   S.selected.clear()
   if (take > 0) {
-    const visible = [...document.querySelectorAll('#usersGrid .uchip')]
-      .filter((chip) => chip.style.display !== 'none')
-    visible.slice(0, take).forEach((chip) => S.selected.add(chip.dataset.slug))
+    ;[...document.querySelectorAll('#usersGrid .uchip')]
+      .slice(0, take)
+      .forEach((chip) => S.selected.add(chip.dataset.slug))
   }
   for (const chip of document.querySelectorAll('#usersGrid .uchip')) {
     const on = S.selected.has(chip.dataset.slug)
@@ -555,7 +544,6 @@ const renderUserChips = (users) => {
       <span class="tick"></span>`)
     chip.classList.toggle('on', S.selected.has(user.slug))
     chip.dataset.slug = user.slug
-    chip.dataset.search = `${user.label} ${user.email}`.toLowerCase()
     chip.setAttribute('aria-label', `Toggle ${user.label}`)
     chip.setAttribute('aria-pressed', String(S.selected.has(user.slug)))
     chip.onclick = () => {
