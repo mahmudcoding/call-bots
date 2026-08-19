@@ -65,17 +65,44 @@ const REFUSALS = [
   /Your browser (is ?n'?t|is not) supported/iu,
 ]
 
+// Meet refuses an anonymous guest for reasons the user can act on, so say what
+// they are rather than only quoting Google.
+const WHY_REFUSED =
+  ' — anonymous bots can only join a meeting that has already started, with the' +
+  ' host in it, and that allows people who are not signed in'
+
 // Read the page text once and match here, rather than a locator per pattern:
 // getByText mangles a regex containing an apostrophe, and this is polled while
-// a bot sits in the lobby.
+// a bot waits. Curly apostrophes are folded so Google can render either.
 const refusalText = async (page) => {
-  const text = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '')
+  const raw = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '')
+  const text = raw.replace(/[\u2018\u2019\u02bc]/gu, "'")
   for (const pattern of REFUSALS) {
     if (!pattern.test(text)) continue
     const line = text.split('\n').find((candidate) => pattern.test(candidate))
-    return (line ?? text).trim().slice(0, 140)
+    const message = (line ?? text).trim().slice(0, 140)
+    return pattern === REFUSALS[0] ? `${message}${WHY_REFUSED}` : message
   }
-  return null
+  // The refusal screen counts down and then returns to the Meet home page,
+  // taking its text with it. Leaving the meeting URL is the same answer.
+  const left = await page
+    .evaluate(() => !/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}\/?$/u.test(location.pathname))
+    .catch(() => false)
+  return left ? `Meet sent the bot back to its home screen${WHY_REFUSED}` : null
+}
+
+// Waits for the page to be ready to drive, but gives up the moment Meet says
+// no. Watching only for readiness would leave a bot reporting "joining" for the
+// whole timeout with the refusal plainly on screen.
+const waitForReady = async (page, ready, timeout, fail, stage, whenTimedOut) => {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    if (await ready()) return
+    const why = await refusalText(page)
+    if (why) await fail(stage, why)
+    if (Date.now() > deadline) await fail(stage, whenTimedOut)
+    await page.waitForTimeout(500)
+  }
 }
 
 const join = async ({ page, target, displayName, log, fail }) => {
@@ -85,12 +112,16 @@ const join = async ({ page, target, displayName, log, fail }) => {
 
   const nameField = page.locator(SEL.name).first()
   const joinButton = page.locator(SEL.joinButton).first()
-  try {
-    await nameField.or(joinButton).first().waitFor({ state: 'visible', timeout: GREEN_ROOM_TIMEOUT })
-  } catch {
-    const why = await refusalText(page)
-    await fail('entry', why ?? 'the Meet green room never appeared (dead link, or Meet blocked the browser)')
-  }
+  await waitForReady(
+    page,
+    async () =>
+      (await nameField.isVisible().catch(() => false)) ||
+      (await joinButton.isVisible().catch(() => false)),
+    GREEN_ROOM_TIMEOUT,
+    fail,
+    'entry',
+    'the Meet green room never appeared (dead link, or Meet blocked the browser)',
+  )
 
   // A signed-in profile skips straight to "Join now" with no name to type.
   if (await nameField.isVisible().catch(() => false)) {
@@ -108,16 +139,14 @@ const join = async ({ page, target, displayName, log, fail }) => {
   // Admitted when the in-call controls appear. Meet can also refuse while we
   // wait, so watch for both instead of only timing out.
   const inCall = page.locator(SEL.leaveButton).first()
-  const deadline = Date.now() + LOBBY_TIMEOUT
-  for (;;) {
-    if (await inCall.isVisible().catch(() => false)) break
-    const why = await refusalText(page)
-    if (why) await fail('join', why)
-    if (Date.now() > deadline) {
-      await fail('join', 'nobody admitted the bot — click Admit in Meet, then send it again')
-    }
-    await page.waitForTimeout(1000)
-  }
+  await waitForReady(
+    page,
+    () => inCall.isVisible().catch(() => false),
+    LOBBY_TIMEOUT,
+    fail,
+    'join',
+    'nobody admitted the bot — click Admit in Meet, then send it again',
+  )
 
   return { callId: target.callId }
 }

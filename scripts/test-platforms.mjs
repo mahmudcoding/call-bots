@@ -163,13 +163,18 @@ const expectFailure = async (title, { link, adapter, body, expect }) => {
   const page = await context.newPage()
   const ctx = { page, target: resolveLink(link), displayName: 'Bot 1', log, fail, options: {} }
   let message = null
+  const started = Date.now()
   try {
     await adapter.join(ctx)
   } catch (error) {
     message = error.message
   }
+  const seconds = (Date.now() - started) / 1000
   check('refuses with a message the user can act on', Boolean(message && expect.test(message)),
     message ?? 'it joined instead of failing')
+  // The refusal is on screen within a second. Waiting out a join timeout before
+  // reading it leaves the bot claiming to be joining while the page says no.
+  check('reports the refusal promptly', seconds < 10, `took ${seconds.toFixed(1)}s`)
   await context.close()
 }
 
@@ -186,7 +191,7 @@ await expectFailure('Meet — call will not admit guests', {
   adapter: meet,
   body: `<!doctype html><meta charset=utf-8><body>
     <div>You can't join this video call</div></body>`,
-  expect: /can'?t join this video call/u,
+  expect: /can'?t join this video call — anonymous bots can only join/u,
 })
 
 await browser.close()
