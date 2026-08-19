@@ -86,9 +86,16 @@ export class Roster {
     return users.map((user) => new SimUser(user, media.get(user.slug), this.options))
   }
 
-  async joinExisting(users, wsId, callId) {
-    this.wsId = wsId
-    this.callId = callId
+  // Single entry point for both link shapes: a call deep link, or the call's
+  // guest invite link (which signed-in users auto-join through and which also
+  // hands us the token guests need).
+  async joinByLink(users, target) {
+    if (target.kind === 'invite') {
+      this.guestToken = target.token
+    } else {
+      this.wsId = target.wsId
+      this.callId = target.callId
+    }
     this.simUsers = await this.#prepare(users)
     this.#manifest()
 
@@ -97,8 +104,18 @@ export class Roster {
       async (sim) => {
         sim.log.info('launching browser')
         await sim.start()
-        await sim.ensureLoggedIn(`/w/${wsId}/call/${callId}`)
-        await sim.joinCall(wsId, callId)
+        if (target.kind === 'invite') {
+          await sim.ensureLoggedIn('/w')
+          const found = await sim.joinViaInvite(target.token)
+          // the first user through tells the roster which call this is
+          if (found && !this.callId) {
+            this.wsId = found.wsId
+            this.callId = found.callId
+          }
+        } else {
+          await sim.ensureLoggedIn(`/w/${target.wsId}/call/${target.callId}`)
+          await sim.joinCall(target.wsId, target.callId)
+        }
       },
       JOIN_CONCURRENCY,
     )
@@ -130,6 +147,10 @@ export class Roster {
     log.info('================================================================')
     log.info(`  CALL URL (join from your own browser):`)
     log.info(`  ${url}`)
+    if (this.guestToken) {
+      log.info(`  GUEST INVITE LINK (works for users and guests):`)
+      log.info(`  ${this.config.baseUrl}/join/${this.guestToken}`)
+    }
     log.info('================================================================')
     log.info('')
 
@@ -179,7 +200,9 @@ export class Roster {
     if (!this.guestToken) await this.#fetchGuestToken(null)
     if (!this.guestToken) {
       throw new Error(
-        'no guest link available — paste one from the host\'s "Add to call" modal',
+        'no guest link available — only the call host can read one. Launch the ' +
+          'session with the call\'s guest invite link (…/join/<token>) instead of ' +
+          'the call URL, or paste that link in the Guests field.',
       )
     }
     const batch = Array.from({ length: count }, () => {

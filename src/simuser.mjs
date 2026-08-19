@@ -1,7 +1,7 @@
 import { authMe, endMeeting, findStringField, leaveMeeting, meetingsCurrent } from './appApi.mjs'
 import { launchUser, saveState, shareTabTitle } from './browser.mjs'
 import { failureShot, mkLogger } from './log.mjs'
-import { SEL, callDeepLinkPath, callsHubPath, loginPath } from './selectors.mjs'
+import { SEL, callDeepLinkPath, callsHubPath, guestJoinPath, loginPath } from './selectors.mjs'
 
 const LOGIN_TIMEOUT = 30_000
 const JOIN_TIMEOUT = 45_000
@@ -139,52 +139,130 @@ export class SimUser {
     if (await this.page.locator(SEL.passwordGate).isVisible().catch(() => false)) {
       await this.#fail('password-gate', 'call requires a password — recreate it without one')
     }
-    if (await this.page.locator(SEL.leaveButton).isVisible().catch(() => false)) {
-      this.log.info('already in the call')
-    } else {
-      await this.#setLobbyPill(SEL.lobbyCamPill, 'data-camera-enabled', !this.options.noVideo)
-      await this.#setLobbyPill(SEL.lobbyMicPill, 'data-mic-enabled', !this.options.noAudio)
-
-      const join = this.page.locator(SEL.lobbyJoin)
-      // lobby-join uses aria-disabled and stays clickable in the DOM
-      await this.page
-        .waitForFunction(
-          (sel) => {
-            const el = document.querySelector(sel)
-            return el !== null && !el.hasAttribute('aria-disabled')
-          },
-          SEL.lobbyJoin,
-          { timeout: 15_000 },
-        )
-        .catch(() => this.#fail('lobby-join-disabled', 'Join button never became enabled'))
-      await join.click()
-
-      try {
-        // the app router.replaces away from the deep link — gate on the
-        // toolbar, never the URL
-        await this.page.locator(SEL.leaveButton).waitFor({
-          state: 'visible',
-          timeout: JOIN_TIMEOUT,
-        })
-      } catch {
-        const stuckInLobby = await this.page
-          .locator(SEL.lobbyPage)
-          .isVisible()
-          .catch(() => false)
-        await this.#fail(
-          'join',
-          stuckInLobby
-            ? 'clicked Join but never reached the call — likely a waiting-room call ' +
-              '(admit in the host UI, or create the call with entry mode Open) or a full 1:1'
-            : 'call toolbar never appeared after Join',
-        )
-      }
-    }
+    await this.#completeLobbyJoin()
 
     this.callId = callId
     this.wsId = wsId
     this.state = 'in-call'
     this.log.info('in call')
+  }
+
+  // Lobby -> in call. Shared by the deep-link path and the invite-link path,
+  // which converges on the same lobby after its automatic join.
+  async #completeLobbyJoin() {
+    if (await this.page.locator(SEL.leaveButton).isVisible().catch(() => false)) {
+      this.log.info('already in the call')
+      return
+    }
+    await this.#setLobbyPill(SEL.lobbyCamPill, 'data-camera-enabled', !this.options.noVideo)
+    await this.#setLobbyPill(SEL.lobbyMicPill, 'data-mic-enabled', !this.options.noAudio)
+
+    const join = this.page.locator(SEL.lobbyJoin)
+    // lobby-join uses aria-disabled and stays clickable in the DOM
+    await this.page
+      .waitForFunction(
+        (sel) => {
+          const el = document.querySelector(sel)
+          return el !== null && !el.hasAttribute('aria-disabled')
+        },
+        SEL.lobbyJoin,
+        { timeout: 15_000 },
+      )
+      .catch(() => this.#fail('lobby-join-disabled', 'Join button never became enabled'))
+    await join.click()
+
+    try {
+      // the app router.replaces away from the deep link — gate on the
+      // toolbar, never the URL
+      await this.page.locator(SEL.leaveButton).waitFor({
+        state: 'visible',
+        timeout: JOIN_TIMEOUT,
+      })
+    } catch {
+      const stuckInLobby = await this.page.locator(SEL.lobbyPage).isVisible().catch(() => false)
+      await this.#fail(
+        'join',
+        stuckInLobby
+          ? 'clicked Join but never reached the call — likely a waiting-room call ' +
+            '(admit in the host UI, or use a call with entry mode Open) or a full 1:1'
+          : 'call toolbar never appeared after Join',
+      )
+    }
+  }
+
+  // A signed-in user opening a guest invite link auto-joins as themselves (no
+  // click) and is redirected to the normal member lobby, so this path only has
+  // to survive the handoff and then finish the lobby like any other join.
+  // Returns the {wsId, callId} learned from the redirected URL.
+  async joinViaInvite(token) {
+    this.state = 'joining'
+    // storageState restores localStorage, and a persisted waiting record makes
+    // the page skip its auto-join on a later run. Auth lives in cookies, so
+    // clearing storage here is safe.
+    await this.page
+      .goto('/', { waitUntil: 'domcontentloaded' })
+      .then(() => this.page.evaluate(() => localStorage.clear()))
+      .catch(() => {})
+
+    await this.page.goto(guestJoinPath(token), { waitUntil: 'domcontentloaded' })
+
+    const pending = this.page.locator(SEL.guestAutoJoin)
+    const lobby = this.page.locator(SEL.lobbyPage)
+    const inCall = this.page.locator(SEL.leaveButton)
+    const blocked = this.page.locator(SEL.guestBlocked)
+    const password = this.page.locator(SEL.guestPassword)
+    try {
+      await pending
+        .or(lobby)
+        .or(inCall)
+        .or(blocked)
+        .or(password)
+        .first()
+        .waitFor({ state: 'visible', timeout: 30_000 })
+    } catch {
+      await this.#fail('invite', 'the invite link page never resolved')
+    }
+
+    if (await blocked.isVisible().catch(() => false)) {
+      const text = ((await blocked.textContent().catch(() => '')) ?? '').trim().slice(0, 120)
+      await this.#fail('invite-blocked', `invite link refused the join: ${text}`)
+    }
+    if (await password.isVisible().catch(() => false)) {
+      await this.#fail(
+        'invite-password',
+        'this call is password-protected — paste the call link instead of the invite link',
+      )
+    }
+    const waiting = await this.page
+      .getByText(/Waiting for the host to let you in/iu)
+      .isVisible()
+      .catch(() => false)
+    if (waiting) {
+      await this.#fail(
+        'invite-waiting',
+        'the call needs host approval — admit the user, or use a call with entry mode Open',
+      )
+    }
+
+    // the auto-join hands off to /w/<wsId>/call/<callId>?guest-link-user=…
+    if (!(await inCall.isVisible().catch(() => false))) {
+      await lobby
+        .waitFor({ state: 'visible', timeout: JOIN_TIMEOUT })
+        .catch(() => this.#fail('invite-lobby', 'auto-join never reached the call lobby'))
+    }
+    const target = this.#readCallFromUrl()
+    await this.#completeLobbyJoin()
+
+    this.wsId = target?.wsId ?? null
+    this.callId = target?.callId ?? null
+    this.state = 'in-call'
+    this.log.info('in call (via invite link)')
+    return target
+  }
+
+  #readCallFromUrl() {
+    const match = this.page.url().match(/\/w\/([A-Za-z0-9_-]+)\/call\/([A-Za-z0-9_-]+)/u)
+    return match ? { wsId: match[1], callId: match[2] } : null
   }
 
   // Creates an Open group call through the Calls Hub UI and returns its id.

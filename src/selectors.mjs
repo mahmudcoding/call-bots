@@ -73,6 +73,55 @@ export const API = {
 export const callDeepLinkPath = (wsId, callId) => `/w/${wsId}/call/${callId}`
 export const guestJoinPath = (token) => `/join/${encodeURIComponent(token)}`
 
+const GUEST_TOKEN_RE = /^[A-Za-z0-9._~-]{16,512}$/u
+
+// The launch screen takes one field that accepts either shape of link.
+// A workspace invite (/invite?token=…) belongs to the Workspace panel and is
+// rejected by name so the two are never confused.
+export const classifyTarget = (input, baseUrl) => {
+  const raw = String(input ?? '').trim()
+  if (!raw) throw new Error('paste the call link or the guest invite link')
+
+  let path = raw
+  if (/^https?:\/\//u.test(raw)) {
+    try {
+      const url = new URL(raw)
+      path = url.pathname
+      if (path === '/invite' || path.startsWith('/invite/')) {
+        throw new Error(
+          'that is a workspace invite link — use the Workspace panel for it, ' +
+            'and paste the call link or the call\'s guest invite link here',
+        )
+      }
+    } catch (error) {
+      if (error.message.includes('workspace invite')) throw error
+      throw new Error(`not a valid link: ${raw}`)
+    }
+  }
+
+  const guestMatch = path.match(/^\/(?:join|guest\/c)\/([^/?#]+)\/?$/u)
+  if (guestMatch) {
+    const token = decodeURIComponent(guestMatch[1])
+    if (!GUEST_TOKEN_RE.test(token)) throw new Error('guest invite token looks malformed')
+    return { kind: 'invite', token }
+  }
+
+  if (/^\/w\//u.test(path)) {
+    const { wsId, callId } = parseCallUrl(raw, baseUrl)
+    return { kind: 'call', wsId, callId }
+  }
+
+  // a bare token pasted without the URL around it
+  if (!/^https?:\/\//u.test(raw) && GUEST_TOKEN_RE.test(raw) && !raw.includes('/')) {
+    return { kind: 'invite', token: raw }
+  }
+
+  throw new Error(
+    `cannot tell what "${raw.slice(0, 60)}" is — expected a call link ` +
+      `(…/w/<workspace>/call/<id>) or a guest invite link (…/join/<token>)`,
+  )
+}
+
 // Accepts a full guest URL or a bare 64-hex token.
 export const parseGuestToken = (input) => {
   const raw = String(input ?? '').trim()

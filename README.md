@@ -67,18 +67,17 @@ none exists.
 `npm start` (or `node src/cli.mjs ui [--port 4610] [--no-open]`) opens a
 control room for the whole session:
 
-- pick users (color-coded to match their published video), join an existing
-  call by URL or create a fresh Open call, with headed / no-video / no-audio
-  toggles;
-- **Workspace panel** — paste any workspace invite link and the app signs every
-  selected user in and accepts the invite (pure HTTP, no browsers: 100 users in
-  about 80 seconds). The joined workspace is saved to the config, so "Create
-  new call" immediately targets it. Re-usable any time to move the fleet into
-  another workspace;
-- **Guests panel** — add any number of anonymous guests to a running call. They
-  join through the guest invite link (no accounts), and the link is detected
-  automatically when the app created the call;
-- one card per simulated user with a **live thumbnail of what that user's
+- paste one link — either the **call URL** from your address bar or the call's
+  **guest invite link** — pick how many users (type a number, or filter and
+  select), set a guest count, and launch;
+- **Guests** — anonymous participants with no accounts, set before launch or
+  added live from the session view. They need the guest invite link, since only
+  a call's host can read one from the API;
+- **Workspace setup** (folded away in the footer — it is a one-time job) —
+  paste a workspace invite link and the app signs every selected user in and
+  accepts it over plain HTTP, no browsers: 100 users in about 80 seconds. The
+  joined workspace is saved back to the config;
+- one card per simulated participant with a **live thumbnail of what that
   browser actually sees**, state pill, and one-click mic / camera / screen
   share / screenshot / leave / rejoin;
 - "all users" bar for bulk mute/camera actions, verified remote-playing count,
@@ -130,14 +129,20 @@ calls-sim clean                                        kill leftover processes
 --ws <id>                       workspace for create (default from users.yaml)
 ```
 
-## What each simulated user publishes
+## What each simulated participant publishes
 
-- **Video**: looping y4m rendered in pure Node — the user's name, a frame
-  counter, and a sweeping bar on a unique background color (a frozen tile is
-  obvious at a glance).
-- **Audio**: a looping 48 kHz WAV where each user speaks a synthesized phrase
-  in their own time slot of a shared cycle, so the **active speaker rotates**
-  through the roster (approximately — browser start times drift).
+- **Video**: one shared **1920×1080** clip, rendered in pure Node — an animated
+  cartoon caller who nods, blinks and talks, over a drifting background, with
+  rotating video-call punchlines ("YOU'RE ON MUTE", "MY CAT IS ON THE
+  KEYBOARD"), a LIVE badge and a frame counter so a frozen tile is obvious. It
+  renders in about two seconds and every participant reuses it.
+- **Audio**: per participant, so a roster sounds like a real (bad) meeting —
+  each one gets a different system voice and a different line, placed in its
+  own slot of a looping cycle so the **active speaker rotates**.
+
+Regenerate with `node src/cli.mjs fixtures --regen`; `--size`/`--fps` tune the
+video (1080p is heavier on CPU — drop to `--size 1280x720` if you want more
+concurrent participants).
 
 ## Limits and behavior notes
 

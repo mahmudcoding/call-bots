@@ -31,15 +31,46 @@ export const detectTtsEngine = async () => {
   return cachedEngine
 }
 
+// Distinct voices make a roster sound like different people. Only macOS `say`
+// exposes a usable set; elsewhere everyone shares the default voice.
+let cachedVoices = null
+export const listVoices = async () => {
+  if (cachedVoices) return cachedVoices
+  const engine = await detectTtsEngine()
+  if (engine !== 'say') {
+    cachedVoices = []
+    return cachedVoices
+  }
+  try {
+    const { stdout } = await run('say', ['-v', '?'])
+    const all = stdout
+      .split('\n')
+      .filter((line) => /\ben_/u.test(line))
+      .map((line) => line.trim().split(/\s{2,}|\s(?=[a-z]{2}_)/u)[0].trim())
+      .filter(Boolean)
+    // novelty voices are unintelligible; keep them out of the rotation
+    const novelty = new Set([
+      'Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles', 'Cellos', 'Good News',
+      'Jester', 'Organ', 'Superstar', 'Trinoids', 'Whisper', 'Wobble', 'Zarvox',
+    ])
+    cachedVoices = all.filter((v) => !novelty.has(v))
+  } catch {
+    cachedVoices = []
+  }
+  return cachedVoices
+}
+
 // Returns 48k mono float samples for the phrase, or null when no system TTS
 // exists (caller falls back to tone bursts). All engines write PCM16 WAV.
-export const synthesizeSpeech = async (phrase) => {
+export const synthesizeSpeech = async (phrase, voice = null) => {
   const engine = await detectTtsEngine()
   if (engine === 'tones') return null
   const tmpFile = join(tmpdir(), `calls-sim-tts-${process.pid}-${Date.now()}.wav`)
   try {
     if (engine === 'say') {
-      await run('say', ['-o', tmpFile, '--data-format=LEI16@48000', phrase])
+      const args = ['-o', tmpFile, '--data-format=LEI16@48000']
+      if (voice) args.push('-v', voice)
+      await run('say', [...args, phrase])
     } else if (engine === 'powershell') {
       const script =
         "Add-Type -AssemblyName System.Speech; " +

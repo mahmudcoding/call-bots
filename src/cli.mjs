@@ -8,17 +8,19 @@ import { Roster } from './orchestrator.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
 import { startRepl } from './repl.mjs'
 import { RUN_MARKER } from './browser.mjs'
-import { parseCallUrl } from './selectors.mjs'
+import { classifyTarget } from './selectors.mjs'
 
 const USAGE = `aloqa-calls-sim — simulate N real users in an Aloqa staging call
 
 usage:
   calls-sim ui [--port 4610]            open the web dashboard (recommended)
-  calls-sim join <call-url> [options]   join an existing call (paste its URL)
-  calls-sim create [options]            first sim user creates an Open call,
-                                        prints its URL, the rest join it
+  calls-sim join <link> [options]       join a call — accepts the call URL or
+                                        the call's guest invite link
+  calls-sim create [options]            testing helper: a sim user starts an
+                                        Open call and prints its links
   calls-sim join-workspace <invite>     join fleet users to a workspace
-  calls-sim fixtures [--regen]          (re)generate per-user media fixtures
+  calls-sim fixtures [--regen]          (re)generate the shared camera video
+                                        and per-user audio
   calls-sim doctor                      check browser, TTS, config, staging
   calls-sim clean                       kill leftover sim browser processes
 
@@ -32,7 +34,7 @@ options:
   --browser <name>      chrome (default, system Chrome) or chromium (bundled)
   --no-video            join with camera off
   --no-audio            join with microphone off
-  --size <WxH>          fixture video size (default 640x360, even dims)
+  --size <WxH>          camera video size (default 1920x1080, even dims)
   --fps <n>             fixture video fps (default 12)
   --regen               regenerate fixtures even if cached
 
@@ -54,7 +56,7 @@ const parseCli = () => {
       browser: { type: 'string', default: 'chrome' },
       'no-video': { type: 'boolean', default: false },
       'no-audio': { type: 'boolean', default: false },
-      size: { type: 'string', default: '640x360' },
+      size: { type: 'string', default: '1920x1080' },
       fps: { type: 'string', default: '12' },
       regen: { type: 'boolean', default: false },
       port: { type: 'string', default: '4610' },
@@ -219,12 +221,16 @@ const main = async () => {
   }
 
   if (command === 'join') {
-    const target = positionals[0]
-    if (!target) throw new Error('usage: calls-sim join <call-url>')
-    const { wsId, callId } = parseCallUrl(target, config.baseUrl)
-    log.info(`joining call ${callId} in workspace ${wsId} with ${users.length} user(s)`)
+    const link = positionals[0]
+    if (!link) throw new Error('usage: calls-sim join <call-link-or-invite-link>')
+    const target = classifyTarget(link, config.baseUrl)
+    log.info(
+      target.kind === 'invite'
+        ? `joining via guest invite link with ${users.length} user(s)`
+        : `joining call ${target.callId} in workspace ${target.wsId} with ${users.length} user(s)`,
+    )
     const roster = new Roster(config, options)
-    await withRoster(roster, () => roster.joinExisting(users, wsId, callId), { guests })
+    await withRoster(roster, () => roster.joinByLink(users, target), { guests })
     return
   }
 

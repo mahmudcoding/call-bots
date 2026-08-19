@@ -10,7 +10,7 @@ import { loadConfig, projectRoot, resolveConfigPath, updateConfigWorkspace } fro
 import { userColorHex } from './fixtures.mjs'
 import { onLog, plain as log } from './log.mjs'
 import { Roster } from './orchestrator.mjs'
-import { parseCallUrl } from './selectors.mjs'
+import { classifyTarget } from './selectors.mjs'
 import {
   discoverJoinedWorkspace,
   extractInviteToken,
@@ -250,19 +250,13 @@ const launchSession = async (configPath, body) => {
     browser: body.browser === 'chromium' ? 'chromium' : 'chrome',
     noVideo: Boolean(body.noVideo),
     noAudio: Boolean(body.noAudio),
-    size: '640x360',
+    size: '1920x1080',
     fps: 12,
     regen: false,
   }
 
-  let target = null
-  if (body.mode === 'join') {
-    target = parseCallUrl(body.callUrl ?? '', config.baseUrl)
-  } else {
-    const wsId = (body.wsId ?? config.workspace ?? '').trim()
-    if (!wsId) throw new Error('create mode needs a workspace id (set it in users.yaml)')
-    target = { wsId }
-  }
+  const target = classifyTarget(body.link ?? body.callUrl ?? '', config.baseUrl)
+  const guestCount = Math.max(0, Math.min(50, Number(body.guests) || 0))
 
   const roster = new Roster(config, options)
   session.roster = roster
@@ -275,12 +269,17 @@ const launchSession = async (configPath, body) => {
   // run in the background; SSE snapshots keep the dashboard current
   ;(async () => {
     try {
-      if (body.mode === 'join') {
-        await roster.joinExisting(users, target.wsId, target.callId)
-      } else {
-        await roster.createAndJoin(users, target.wsId)
-      }
+      await roster.joinByLink(users, target)
       session.status = 'running'
+      if (guestCount > 0) {
+        // guests are additive: a guest failure must not tear down a live roster
+        try {
+          const result = await roster.addGuests(guestCount)
+          log.info(`guests in call: ${result.added}${result.failed ? `, failed ${result.failed}` : ''}`)
+        } catch (error) {
+          log.error(`guests: ${error.message}`)
+        }
+      }
     } catch (error) {
       log.error(`launch failed: ${error.message}`)
       session.lastRunError = error.message
