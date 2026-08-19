@@ -102,6 +102,12 @@ export const ensureClip = async (theme, { size = '1920x1080', fps = 12, seconds 
   return out
 }
 
+// A clip imported with its own soundtrack speaks for itself.
+const importedVoice = (theme) => {
+  const file = join(fixturesDir, `voice-${theme + 1}.wav`)
+  return existsSync(file) ? file : null
+}
+
 const ensureVoice = async (n, voices) => {
   const audio = join(fixturesDir, `bot-${n}.wav`)
   if (existsSync(audio)) return audio
@@ -129,7 +135,7 @@ export const ensureGuestFixtures = async (guests, options = {}) => {
   for (const guest of guests) {
     const theme = (guest.n - 1) % THEME_COUNT
     const video = await ensureClip(theme, options)
-    const audio = await ensureVoice(guest.n, voices)
+    const audio = importedVoice(theme) ?? (await ensureVoice(guest.n, voices))
     result.set(guest.slug, { video, audio, theme })
   }
   return result

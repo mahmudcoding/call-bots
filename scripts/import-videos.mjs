@@ -6,9 +6,11 @@
 //
 //   node scripts/import-videos.mjs ~/Downloads/meeting-clips
 //
-// Every video in that folder becomes clip-1, clip-2 … in fixture order. Bots
-// cycle through whatever clips exist; anything missing falls back to a drawn
-// clip, so a partial set is fine.
+// Every video in that folder becomes clip-1, clip-2 … in fixture order, and its
+// own soundtrack becomes that bot's voice. Video and audio are cut from the
+// same segment, so the voice matches the face and they stay together as both
+// loop. Bots cycle through whatever clips exist; anything missing falls back to
+// a drawn clip and synthesised speech, so a partial set is fine.
 import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { extname, join, resolve } from 'node:path'
@@ -73,7 +75,27 @@ for (const [index, name] of files.entries()) {
       '-f', 'mjpeg', tmp,
     ], { maxBuffer: 32 * 1024 * 1024 })
     renameSync(tmp, out)
-    console.log(`ok (${((Date.now() - started) / 1000).toFixed(0)}s)`)
+
+    // the clip's own audio, same segment, as the bot's voice
+    const voice = join(fixturesDir, `voice-${index + 1}.wav`)
+    const voiceTmp = `${voice}.part`
+    let sound = 'no audio track — will use synthesised speech'
+    try {
+      await run('ffmpeg', [
+        '-y', '-loglevel', 'error',
+        '-ss', String(START),
+        '-i', join(source, name),
+        '-t', String(SECONDS),
+        '-vn', '-ac', '1', '-ar', '48000', '-c:a', 'pcm_s16le',
+        '-f', 'wav', voiceTmp,
+      ], { maxBuffer: 32 * 1024 * 1024 })
+      renameSync(voiceTmp, voice)
+      sound = 'with its own audio'
+    } catch {
+      rmSync(voiceTmp, { force: true })
+      rmSync(voice, { force: true })
+    }
+    console.log(`ok (${((Date.now() - started) / 1000).toFixed(0)}s) — ${sound}`)
   } catch (error) {
     rmSync(tmp, { force: true })
     console.log(`failed: ${String(error.stderr ?? error.message).trim().split('\n').pop()}`)
