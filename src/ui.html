@@ -32,6 +32,10 @@
          background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 4px; color: var(--text); }
   button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
   input { font: inherit; color: inherit; }
+  /* number fields here are typed, not stepped — the spinners only add clutter */
+  input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   ::selection { background: rgba(79,140,255,.35); }
 
   /* ---------- header ---------- */
@@ -350,11 +354,8 @@
 
           <div class="field">
             <label>Guests</label>
-            <div style="display:flex;align-items:center;gap:10px">
-              <input type="number" id="guestsAtLaunch" min="0" max="50" value="0"
-                     style="width:90px;height:40px;padding:0 12px;border-radius:9px;background:var(--card);border:1px solid var(--line-2);outline:none;font-size:14px">
-              <span class="hint" style="margin:0">anonymous participants — needs the guest invite link</span>
-            </div>
+            <input type="number" id="guestsAtLaunch" min="0" max="50" value="0"
+                   style="width:90px;height:42px;padding:0 14px;border-radius:var(--r-sm);background:var(--card);border:1px solid var(--line-2);outline:none;font-size:14px">
           </div>
 
           <div class="opts">
@@ -370,7 +371,7 @@
           <label>Simulated users</label>
           <div class="users-toolbar">
             <input type="search" id="userSearch" placeholder="Filter users…" spellcheck="false">
-            <input type="number" id="pickCount" min="1" placeholder="N" title="Select the first N users"
+            <input type="number" id="pickCount" min="1" title="Select the first N users"
                    style="width:66px;height:32px;padding:0 9px;border-radius:9px;background:var(--card);border:1px solid var(--line-2);outline:none;font-size:13px">
             <button class="quick" id="pickFirst">Select first</button>
             <button class="quick" data-pick="all">All</button>
@@ -382,10 +383,8 @@
       </div>
 
       <div class="hint" style="display:flex;align-items:center;gap:8px;margin-top:24px;padding-top:16px;border-top:1px solid var(--line)">
-        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-          Accounts config: <span id="cfgPath" style="font-family:ui-monospace,Menlo,monospace"></span>
-        </span>
-        <button id="revealCfg" class="btn" style="height:26px;padding:0 10px;font-size:11.5px;flex:none">Reveal file</button>
+        <span class="spacer"></span>
+        <button id="revealCfg" class="btn" style="height:26px;padding:0 10px;font-size:11.5px;flex:none">Accounts file…</button>
         <button id="wsToggle" class="btn" style="height:26px;padding:0 10px;font-size:11.5px;flex:none">Workspace setup…</button>
       </div>
 
@@ -860,7 +859,6 @@ const render = (state) => {
 
   // launch panel
   if (!active) {
-    if (state.config?.file) $('#cfgPath').textContent = state.config.file
     if (state.config?.ok) {
       $('#cfgError').hidden = true
       $('#launchForm').style.display = ''
