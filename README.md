@@ -1,12 +1,17 @@
 # Call Bots
 
-Put any number of **guests** into an Aloqa call from one computer. Each guest is
-a real browser that opens the call's invite link, types a name, and publishes
-real WebRTC audio and video from synthetic capture devices. At the product and
-server level they are ordinary anonymous participants.
+Put any number of **guests** into a video call from one computer. Each guest is
+a real browser that opens the call link, types a name, and publishes real WebRTC
+audio and video from synthetic capture devices. At the product and server level
+they are ordinary anonymous participants.
 
-No accounts, no workspace, nothing to provision: the invite link is the only
-input.
+No accounts, nothing to provision: the call link is the only input, and it also
+says which platform to drive.
+
+| Platform | Link | Getting in |
+| --- | --- | --- |
+| Aloqa | `…/join/<token>` | Straight in — guests have no lobby |
+| Google Meet | `meet.google.com/abc-defg-hij` | Anonymous guests wait in the lobby; admit each one |
 
 ## Install
 
@@ -40,8 +45,10 @@ Node, ffmpeg, or this repository.
 
 ## Using it
 
-1. Start a call in Aloqa and copy its **invite link** (the "Add to call" panel).
-2. Paste it, choose how many guests, press **Send guests**.
+1. Copy the call's link — in Aloqa the **invite link** from the "Add to call"
+   panel, in Meet the meeting link.
+2. Paste it, choose how many bots, press **Send bots**. The window shows which
+   platform it recognised.
 3. Guests appear as cards with a live view of what each one sees. Mute, toggle
    cameras, share a screen, or remove a guest — individually or for all of them.
    **Add guests** puts more into the same call; **Stop** ends the session and
@@ -91,6 +98,14 @@ macOS (`CALL_BOTS_HOME` overrides it).
   the app reports that the host needs to admit them.
 - Guests are anonymous, so each browser is always a fresh context — a signed-in
   cookie would make the invite page join as that account instead.
-- Selector drift after an Aloqa deploy: every selector lives in
-  `src/selectors.mjs`.
+- Each platform is one file in `src/platforms/`, holding its own selectors,
+  join sequence, device toggles and participant grid. Selector drift after a
+  deploy is fixed there and nowhere else; adding a platform means adding a file
+  and listing it in `src/platforms/index.mjs`.
+- `npm run test:platforms` drives every adapter against a page mimicking that
+  platform's DOM. It catches a broken adapter, not a redesigned product.
+- **Google Meet**: bots join anonymously, so each one waits until you admit it.
+  Meet must allow guests to ask to join. Bots decline non-essential cookies
+  rather than accepting on your behalf. If Google refuses the automated browser
+  outright, the bot reports what Meet said instead of working around it.
 - `npm run clean` kills leftover guest browsers after a hard kill.

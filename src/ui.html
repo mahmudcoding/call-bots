@@ -189,6 +189,7 @@
 <header>
   <div class="brand"><div class="dot"></div>Call Bots</div>
   <span id="statusPill" class="pill">idle</span>
+  <span id="platformPill" class="pill" hidden></span>
   <div class="spacer"></div>
   <button id="stopBtn" class="btn -danger" hidden>Stop</button>
 </header>
@@ -197,8 +198,8 @@
   <div class="wrap">
     <div class="bar">
       <div class="grow">
-        <div class="lbl">Invite link</div>
-        <input type="text" id="link" placeholder="paste invite link" spellcheck="false">
+        <div class="lbl">Call link</div>
+        <input type="text" id="link" placeholder="paste a Google Meet or Aloqa call link" spellcheck="false">
       </div>
       <div class="count">
         <div class="lbl">Bots</div>
@@ -420,6 +421,19 @@ const render = (state) => {
   const pill = $('#statusPill')
   pill.textContent = state.status
   pill.className = `pill -${state.status}`
+
+  const platform = state.session?.platform ?? null
+  const platformPill = $('#platformPill')
+  platformPill.hidden = !platform
+  platformPill.textContent = platform ?? ''
+
+  // Meet holds every guest in a lobby, so the call goes nowhere until the host
+  // admits them. Say it once, when it is the thing standing in the way.
+  if (platform === 'Google Meet' && state.status === 'joining' && !S.lobbyNoticed) {
+    S.lobbyNoticed = true
+    toast('Bots are waiting in the Meet lobby — admit them', '')
+  }
+  if (state.status === 'idle') S.lobbyNoticed = false
 
   $('#stopBtn').hidden = !running
   $('#allbar').hidden = !running

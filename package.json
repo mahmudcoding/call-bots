@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Put any number of guests into an Aloqa call — real WebRTC audio and video from synthetic capture devices",
+  "description": "Put any number of guests into an Aloqa call \u2014 real WebRTC audio and video from synthetic capture devices",
   "bin": {
     "call-bots": "./src/cli.mjs"
   },
@@ -12,7 +12,8 @@
     "build:app": "node scripts/build-macos-app.mjs",
     "doctor": "node src/cli.mjs doctor",
     "clean": "node src/cli.mjs clean",
-    "postinstall": "node scripts/postinstall.mjs"
+    "postinstall": "node scripts/postinstall.mjs",
+    "test:platforms": "node scripts/test-platforms.mjs"
   },
   "engines": {
     "node": ">=20"

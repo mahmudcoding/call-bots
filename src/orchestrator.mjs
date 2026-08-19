@@ -35,19 +35,24 @@ export class Roster {
     this.options.runDir = this.runDir
     this.guests = []
     this.counter = 0
-    this.token = null
+    this.target = null
     this.meetingId = null
     this.tearingDown = false
   }
 
   get callUrl() {
-    return this.token ? `${this.options.baseUrl}/join/${this.token}` : null
+    return this.target?.url ?? null
+  }
+
+  get platform() {
+    return this.target?.label ?? null
   }
 
   #manifest(extra = {}) {
     writeManifest(this.runDir, {
       runId: this.runId,
       baseUrl: this.options.baseUrl,
+      platform: this.target?.platform ?? null,
       meetingId: this.meetingId,
       guests: this.guests.map((guest) => ({ label: guest.label, state: guest.state })),
       ...extra,
@@ -62,10 +67,10 @@ export class Roster {
     return this.guests.find((guest) => guest.user.slug === slug) ?? null
   }
 
-  // Sends `count` more bots into the call. The first call sets the token.
-  async add(count, token = null) {
-    if (token) this.token = token
-    if (!this.token) throw new Error('no invite link — paste the call\'s invite link first')
+  // Sends `count` more bots into the call. The first call sets the target.
+  async add(count, target = null) {
+    if (target) this.target = target
+    if (!this.target) throw new Error('no call link — paste the call link first')
 
     const total = this.guests.length + count
     const warning = concurrencyWarning(total)
@@ -87,7 +92,7 @@ export class Roster {
       async (guest) => {
         guest.log.info('launching browser')
         await guest.start()
-        await guest.join(this.token)
+        await guest.join(this.target)
         this.meetingId ??= guest.meetingId
       },
       JOIN_CONCURRENCY,
@@ -123,7 +128,7 @@ export class Roster {
         lastError: guest.lastError,
       })
     }
-    return { meetingId: this.meetingId, inviteLink: this.callUrl, guests }
+    return { meetingId: this.meetingId, inviteLink: this.callUrl, platform: this.platform, guests }
   }
 
   // One bot checks that the other tiles really render — buttons are not proof.

@@ -7,7 +7,7 @@ import { ensureGuestFixtures } from './fixtures.mjs'
 import { plain as log } from './log.mjs'
 import { Roster } from './orchestrator.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
-import { parseInviteLink } from './selectors.mjs'
+import { resolveLink } from './platforms/index.mjs'
 
 const USAGE = `Call Bots — put any number of guests into an Aloqa call
 
@@ -107,9 +107,9 @@ const main = async () => {
   if (command === 'join') {
     const link = positionals[0]
     if (!link) throw new Error('usage: call-bots join <invite-link>')
-    const { origin, token } = parseInviteLink(link)
+    const target = resolveLink(link)
     const count = Number(values.guests) || 2
-    const roster = new Roster(buildOptions(values, origin))
+    const roster = new Roster(buildOptions(values, target.origin))
 
     let interrupted = 0
     const onSigint = () => {
@@ -121,7 +121,7 @@ const main = async () => {
     process.on('SIGINT', onSigint)
 
     log.info(`sending ${count} guest(s) into the call`)
-    const result = await roster.add(count, token)
+    const result = await roster.add(count, target)
     if (roster.inCall().length === 0) {
       log.error('no guest reached the call')
       await roster.teardownAll()

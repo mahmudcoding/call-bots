@@ -9,7 +9,7 @@ import { bundledChromiumPath, systemChromePath } from './browser.mjs'
 import { onLog, plain as log } from './log.mjs'
 import { machineProfile } from './machine.mjs'
 import { Roster } from './orchestrator.mjs'
-import { parseInviteLink } from './selectors.mjs'
+import { resolveLink } from './platforms/index.mjs'
 
 const UI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'ui.html')
 
@@ -133,15 +133,15 @@ const json = (response, status, body) => {
   response.end(JSON.stringify(body))
 }
 
-// Send the first guests in. The invite link carries both the origin and the
-// token, so there is nothing else to configure.
+// Send the first bots in. The link carries the platform, the origin and the
+// call itself, so there is nothing else to configure.
 const startSession = async (body) => {
   if (session.status !== 'idle') throw new Error(`a session is already ${session.status}`)
-  const { origin, token } = parseInviteLink(body.link ?? '')
+  const target = resolveLink(body.link ?? '')
   const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
 
   const roster = new Roster({
-    baseUrl: origin,
+    baseUrl: target.origin,
     headed: false,
     browser: 'auto',
     noVideo: Boolean(body.noVideo),
@@ -158,7 +158,7 @@ const startSession = async (body) => {
 
   ;(async () => {
     try {
-      const result = await roster.add(count, token)
+      const result = await roster.add(count, target)
       session.status = roster.inCall().length > 0 ? 'running' : 'idle'
       if (roster.inCall().length === 0) {
         session.lastError = 'no bot reached the call'

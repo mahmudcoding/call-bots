@@ -1,13 +1,12 @@
 import { launchGuest } from './browser.mjs'
 import { failureShot, mkLogger } from './log.mjs'
-import { SEL, guestJoinPath } from './selectors.mjs'
+import { platformById } from './platforms/index.mjs'
 
-const JOIN_TIMEOUT = 60_000
-const TOGGLE_TIMEOUT = 8_000
-
-// One anonymous participant: a real browser that opens the call's invite link,
-// types a name, and publishes fake-device audio and video. No account, no
-// workspace, nothing to provision.
+// One anonymous participant: a real browser that opens the call link, types a
+// name, and publishes fake-device audio and video. No account, nothing to
+// provision. Everything platform-specific — how to get in, where the device
+// toggles are, how to read the participant grid — lives in the adapter under
+// src/platforms; this class only sequences it.
 export class Guest {
   constructor(guest, media, options) {
     this.user = guest // {n, label, slug, index}
@@ -20,6 +19,7 @@ export class Guest {
     this.context = null
     this.page = null
     this.lastError = null
+    this.platform = null
   }
 
   get label() {
@@ -38,7 +38,7 @@ export class Guest {
     return failureShot(this.page, this.options.runDir, this.user.slug, name)
   }
 
-  async #fail(name, message) {
+  #fail = async (name, message) => {
     const shot = await this.#shot(name)
     this.state = `error:${name}`
     this.lastError = message
@@ -47,146 +47,65 @@ export class Guest {
     )
   }
 
-  // Bots join as guests, which have no lobby: name form -> call surface.
-  async join(token) {
+  // The context the adapter works against.
+  #ctx(target) {
+    return {
+      page: this.page,
+      target: target ?? this.target,
+      displayName: this.label,
+      log: this.log,
+      fail: this.#fail,
+      options: this.options,
+    }
+  }
+
+  async join(target) {
+    const platform = platformById(target.platform)
+    if (!platform) throw new Error(`no adapter for platform "${target.platform}"`)
+    this.platform = platform
+    this.target = target
     this.state = 'joining'
-    await this.page.goto(guestJoinPath(token), { waitUntil: 'domcontentloaded' })
 
-    const nameField = this.page.locator(SEL.guestName)
-    const blocked = this.page.locator(SEL.guestBlocked)
-    try {
-      await nameField.or(blocked).first().waitFor({ state: 'visible', timeout: 30_000 })
-    } catch {
-      await this.#fail('entry', 'the invite link page never resolved (dead or wrong link?)')
-    }
-    if (await blocked.isVisible().catch(() => false)) {
-      const why = ((await blocked.textContent().catch(() => '')) ?? '').trim().slice(0, 120)
-      await this.#fail('blocked', `join refused: ${why}`)
-    }
-
-    await nameField.fill(this.label)
-    const submit = this.page.locator(SEL.guestSubmit)
-    await submit.waitFor({ state: 'visible', timeout: 10_000 })
-    await submit.click()
-
-    try {
-      await this.page.locator(SEL.guestSurface).waitFor({ state: 'visible', timeout: JOIN_TIMEOUT })
-    } catch {
-      const waiting = await this.page
-        .getByText(/Waiting for approval/iu)
-        .isVisible()
-        .catch(() => false)
-      await this.#fail(
-        'join',
-        waiting
-          ? 'waiting for host approval — admit the bot, or use a call with entry mode Open'
-          : 'the call never opened after submitting the name',
-      )
-    }
-
-    // /guest/meeting/<id> — the only place the meeting id is exposed to us
-    this.meetingId = this.page.url().match(/\/guest\/meeting\/([A-Za-z0-9_-]+)/u)?.[1] ?? null
+    const { callId } = await platform.join(this.#ctx(target))
+    this.meetingId = callId ?? null
     this.state = 'in-call'
 
-    // no lobby means devices start off; arm them the way a person would
-    if (!this.options.noVideo) await this.setCam(true).catch(() => 'unknown')
-    if (!this.options.noAudio) await this.setMic(true).catch(() => 'unknown')
+    if (platform.armAfterJoin) {
+      if (!this.options.noVideo) await this.setCam(true).catch(() => 'unknown')
+      if (!this.options.noAudio) await this.setMic(true).catch(() => 'unknown')
+    }
     this.log.info('in call')
   }
 
   // --- in-call devices ------------------------------------------------------
-  // The PAIR wrapper carries the testid; its first button is the toggle and
-  // aria-pressed="true" means the device is OFF. A host force-mute replaces the
-  // toggle with a request button — detect it, never blind-click.
-
-  async #deviceState(pairSelector, requestSelector) {
-    if (await this.page.locator(requestSelector).isVisible().catch(() => false)) return 'request'
-    const toggle = this.page.locator(`${pairSelector} button`).first()
-    if (!(await toggle.isVisible().catch(() => false))) return 'unknown'
-    const pressed = await toggle.getAttribute('aria-pressed')
-    if (pressed === 'true') return 'off'
-    if (pressed === 'false') return 'on'
-    return 'unknown'
-  }
 
   micState() {
-    return this.#deviceState(SEL.micPair, SEL.micRequest)
+    return this.platform ? this.platform.micState(this.page) : Promise.resolve('unknown')
   }
 
   camState() {
-    return this.#deviceState(SEL.camPair, SEL.camRequest)
-  }
-
-  async #setDevice(kind, pairSelector, requestSelector, on) {
-    const current = await this.#deviceState(pairSelector, requestSelector)
-    if (current === 'request') {
-      this.log.warn(`${kind} is host-restricted (request mode) — cannot toggle`)
-      return 'request'
-    }
-    if (current === 'unknown') {
-      this.log.warn(`${kind} toggle not found — not in call?`)
-      return 'unknown'
-    }
-    const want = on ? 'on' : 'off'
-    if (current === want) return want
-    await this.page.locator(`${pairSelector} button`).first().click()
-    try {
-      await this.page.waitForFunction(
-        ({ sel, value }) =>
-          document.querySelector(`${sel} button`)?.getAttribute('aria-pressed') === value,
-        { sel: pairSelector, value: on ? 'false' : 'true' },
-        { timeout: TOGGLE_TIMEOUT },
-      )
-    } catch {
-      this.log.warn(`${kind} did not reach "${want}" within ${TOGGLE_TIMEOUT}ms`)
-    }
-    return this.#deviceState(pairSelector, requestSelector)
+    return this.platform ? this.platform.camState(this.page) : Promise.resolve('unknown')
   }
 
   setMic(on) {
-    return this.#setDevice('mic', SEL.micPair, SEL.micRequest, on)
+    return this.platform ? this.platform.setMic(this.#ctx(), on) : Promise.resolve('unknown')
   }
 
   setCam(on) {
-    return this.#setDevice('camera', SEL.camPair, SEL.camRequest, on)
+    return this.platform ? this.platform.setCam(this.#ctx(), on) : Promise.resolve('unknown')
   }
 
   // Buttons are not proof: check that remote <video> elements really play.
   async verifyRemote() {
-    return this.page.evaluate((sel) => {
-      const tiles = [...document.querySelectorAll(sel.tile)]
-      const summary = { local: 0, remote: 0, remotePlaying: 0, frozen: 0, names: [] }
-      for (const tile of tiles) {
-        const local = tile.getAttribute('data-local') === 'true'
-        const name = tile.querySelector('[data-testid="participant-name"]')?.textContent?.trim()
-        if (name) summary.names.push(`${local ? '*' : ''}${name}`)
-        if (tile.getAttribute('data-video-frozen') === 'true') summary.frozen += 1
-        if (local) {
-          summary.local += 1
-          continue
-        }
-        summary.remote += 1
-        const video = tile.querySelector('[data-testid="participant-video"]')
-        if (video && video.readyState >= 2 && video.videoWidth > 0 && !video.paused) {
-          summary.remotePlaying += 1
-        }
-      }
-      return summary
-    }, SEL)
+    if (!this.platform) return null
+    return this.platform.remote(this.page)
   }
 
   async leave() {
     if (this.state !== 'in-call') return
     this.state = 'leaving'
     try {
-      await this.page.locator(SEL.leaveButton).click({ timeout: 5000 })
-      const confirm = this.page.locator(SEL.leaveConfirm)
-      const appeared = await confirm
-        .waitFor({ state: 'visible', timeout: 2000 })
-        .then(() => true)
-        .catch(() => false)
-      if (appeared) await confirm.click({ timeout: 3000 })
-      this.log.info('left the call')
+      await this.platform.leave(this.#ctx())
     } catch {
       this.log.warn('leave button did not respond; closing the browser instead')
     }
