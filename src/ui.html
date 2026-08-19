@@ -548,7 +548,6 @@ const renderUserChips = (users) => {
   if (grid.dataset.sig === sig) { updateUserHint(); return }
   grid.dataset.sig = sig
   grid.innerHTML = ''
-  if (S.selected.size === 0) users.slice(0, 4).forEach((u) => S.selected.add(u.slug))
   for (const user of users) {
     const chip = el('button', 'uchip', `
       <span class="swatch" style="background:${esc(user.color)}"></span>
