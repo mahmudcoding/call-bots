@@ -68,7 +68,9 @@ export class Roster {
   }
 
   // Sends `count` more bots into the call. The first call sets the target.
-  async add(count, target = null) {
+  // `overrides` applies to this batch only, so bots added later can arrive with
+  // their camera or microphone in a different state from the ones already in.
+  async add(count, target = null, overrides = null) {
     if (target) this.target = target
     if (!this.target) throw new Error('no call link — paste the call link first')
 
@@ -83,7 +85,8 @@ export class Roster {
     })
     log.info(`preparing ${batch.length} bot(s)`)
     const media = await ensureGuestFixtures(batch, this.options)
-    const guests = batch.map((guest) => new Guest(guest, media.get(guest.slug), this.options))
+    const options = overrides ? { ...this.options, ...overrides } : this.options
+    const guests = batch.map((guest) => new Guest(guest, media.get(guest.slug), options))
     this.guests.push(...guests)
     this.#manifest()
 

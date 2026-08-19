@@ -106,6 +106,19 @@
   .bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
   .bar input:disabled { opacity: .6; }
   .bar .count { width: 110px; flex: none; }
+  .bar .devices { flex: none; }
+  .toggles { display: flex; gap: 8px; }
+  .tgl {
+    height: 42px; min-width: 104px; padding: 0 14px; border-radius: var(--r-sm);
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    background: var(--card); border: 1px solid var(--line-2); color: var(--muted);
+    font-weight: 600; font-size: 13px; transition: all .15s ease;
+  }
+  .tgl:hover { border-color: rgba(255,255,255,.22); }
+  .tgl .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .tgl.-on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+  .tgl.-on .pip { background: var(--ok); }
+  .tgl:disabled { opacity: .6; }
   .bar .go { height: 42px; padding: 0 22px; font-size: 14px; }
 
   .allbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -204,6 +217,15 @@
         <div class="lbl">Bots</div>
         <input type="number" id="count" min="1" max="50" value="2">
       </div>
+      <div class="devices">
+        <div class="lbl">Join with</div>
+        <div class="toggles">
+          <button type="button" id="camToggle" class="tgl -on" aria-pressed="true">
+            <span class="pip"></span><span>Camera on</span></button>
+          <button type="button" id="micToggle" class="tgl -on" aria-pressed="true">
+            <span class="pip"></span><span>Mic on</span></button>
+        </div>
+      </div>
       <button id="goBtn" class="btn -accent go">Send bots</button>
     </div>
 
@@ -260,7 +282,24 @@ const post = async (url, body) => {
   return data
 }
 
-const S = { state: null, cards: new Map(), errorShown: null }
+const S = { state: null, cards: new Map(), errorShown: null, camOn: true, micOn: true }
+
+/* ---------- what bots join with ---------- */
+// Only the state they arrive in — every bot still carries its clip and voice,
+// so a camera turned on from its card afterwards publishes real footage.
+const devices = [
+  { key: 'camOn', el: '#camToggle', name: 'Camera' },
+  { key: 'micOn', el: '#micToggle', name: 'Mic' },
+]
+for (const device of devices) {
+  $(device.el).onclick = () => {
+    S[device.key] = !S[device.key]
+    const button = $(device.el)
+    button.classList.toggle('-on', S[device.key])
+    button.setAttribute('aria-pressed', String(S[device.key]))
+    button.lastElementChild.textContent = `${device.name} ${S[device.key] ? 'on' : 'off'}`
+  }
+}
 
 /* ---------- send bots (starts the session, or adds to it) ---------- */
 $('#goBtn').onclick = async () => {
@@ -272,10 +311,12 @@ $('#goBtn').onclick = async () => {
   btn.textContent = 'Sending…'
   try {
     if (running) {
-      const res = await post('/api/add', { guests })
+      const res = await post('/api/add', { guests, camera: S.camOn, mic: S.micOn })
       toast(`${res.added} bot(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
     } else {
-      await post('/api/start', { link: $('#link').value.trim(), guests })
+      await post('/api/start', {
+        link: $('#link').value.trim(), guests, camera: S.camOn, mic: S.micOn,
+      })
     }
   } catch (error) {
     toast(error.message, '-err')

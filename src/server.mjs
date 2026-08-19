@@ -146,6 +146,8 @@ const startSession = async (body) => {
     browser: 'auto',
     noVideo: Boolean(body.noVideo),
     noAudio: Boolean(body.noAudio),
+    startCam: body.camera !== false,
+    startMic: body.mic !== false,
     size: '1920x1080',
     fps: 12,
   })
@@ -293,7 +295,10 @@ export const startServer = async ({ port = 4610, open = true }) => {
           throw new Error('start a session first')
         }
         const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
-        const result = await session.roster.add(count)
+        const result = await session.roster.add(count, null, {
+          startCam: body.camera !== false,
+          startMic: body.mic !== false,
+        })
         broadcast(await stateSnapshot())
         json(response, 200, { ok: true, ...result })
         return

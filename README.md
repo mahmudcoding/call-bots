@@ -41,7 +41,10 @@ Node, ffmpeg, or this repository.
 ## Using it
 
 1. Start a call in Aloqa and copy its **invite link** (the "Add to call" panel).
-2. Paste it, choose how many bots, press **Send bots**.
+2. Paste it, choose how many bots, and whether they arrive with **Camera** and
+   **Mic** on, then press **Send bots**. Those toggles set the state a bot
+   joins in; every bot still carries its clip and voice, so one switched on
+   later publishes real footage rather than an empty tile.
 3. Guests appear as cards with a live view of what each one sees. Mute, toggle
    cameras, share a screen, or remove a guest — individually or for all of them.
    **Add guests** puts more into the same call; **Stop** ends the session and

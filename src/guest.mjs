@@ -70,9 +70,16 @@ export class Guest {
     this.meetingId = callId ?? null
     this.state = 'in-call'
 
+    // Devices start off, so a bot only publishes what it was sent in with. The
+    // clips stay attached either way, so a camera switched on later still shows
+    // real footage rather than Chrome's default pattern.
     if (platform.armAfterJoin) {
-      if (!this.options.noVideo) await this.setCam(true).catch(() => 'unknown')
-      if (!this.options.noAudio) await this.setMic(true).catch(() => 'unknown')
+      if (!this.options.noVideo && this.options.startCam !== false) {
+        await this.setCam(true).catch(() => 'unknown')
+      }
+      if (!this.options.noAudio && this.options.startMic !== false) {
+        await this.setMic(true).catch(() => 'unknown')
+      }
     }
     this.log.info('in call')
   }
