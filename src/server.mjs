@@ -55,7 +55,7 @@ const ensureBrowser = () => {
     log.warn('cannot find the playwright CLI — install Google Chrome instead')
     return
   }
-  log.warn('downloading Chromium (one-time, ~150 MB)…')
+  log.warn('downloading Chromium (one-time, ~175 MB)…')
   browserInstall = spawn(process.execPath, [cliPath, 'install', 'chromium'], {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -63,9 +63,11 @@ const ensureBrowser = () => {
   const relay = (stream) =>
     stream.on('data', (chunk) => {
       const text = String(chunk)
-      const percent = [...text.matchAll(/(\d{1,3})%\s+of\s+([\d.]+\s*\wiB)/gu)].pop()
+      // playwright reports MiB; show MB, which is what people expect
+      const percent = [...text.matchAll(/(\d{1,3})%\s+of\s+([\d.]+)\s*MiB/gu)].pop()
       if (percent) {
-        browserProgress = `${percent[1]}% of ${percent[2]}`
+        const mb = Math.round(Number(percent[2]) * 1.048576)
+        browserProgress = `${percent[1]}% of ${mb} MB`
         return
       }
       const line = text.trim().split('\n').pop()

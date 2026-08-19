@@ -276,7 +276,6 @@ $('#goBtn').onclick = async () => {
       toast(`${res.added} guest(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
     } else {
       await post('/api/start', { link: $('#link').value.trim(), guests })
-      toast('Sending guests in…', '-ok')
     }
   } catch (error) {
     toast(error.message, '-err')
@@ -441,7 +440,7 @@ const render = (state) => {
     $('#emptyTitle').textContent = 'Getting the browser ready'
     $('#emptyText').textContent = state.browserProgress
       ? `Downloading Chromium — ${state.browserProgress}. Guests can join as soon as it lands.`
-      : 'Downloading Chromium (one-time, about 150 MB). Guests can join as soon as it lands.'
+      : 'Downloading Chromium (one-time, about 175 MB). Guests can join as soon as it lands.'
     $('#goBtn').disabled = true
   } else if (!state.browserReady) {
     $('#emptyTitle').textContent = 'No browser available'
