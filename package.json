@@ -1,9 +1,9 @@
 {
   "name": "call-bots",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Put any number of guests into an Aloqa call \u2014 real WebRTC audio and video from synthetic capture devices",
+  "description": "Put any number of guests into an Aloqa call — real WebRTC audio and video from synthetic capture devices",
   "bin": {
     "call-bots": "./src/cli.mjs"
   },
