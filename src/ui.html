@@ -105,6 +105,7 @@
   .bar input::placeholder { color: var(--faint); }
   .bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
   .bar input:disabled { opacity: .6; }
+  .bar .bot-label { width: 170px; flex: none; }
   .bar .count { width: 110px; flex: none; }
   .bar .devices { flex: none; }
   .toggles { display: flex; gap: 8px; }
@@ -124,6 +125,16 @@
   .allbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
   .allbar .lead { font-size: 12px; font-weight: 650; color: var(--faint); text-transform: uppercase; letter-spacing: .4px; }
   .allbar .btn { height: 30px; padding: 0 11px; font-size: 12.5px; }
+
+  /* ---------- one group per send ---------- */
+  .batch { margin-bottom: 22px; }
+  .bhead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .bhead .nm {
+    font-size: 11px; font-weight: 700; letter-spacing: .9px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .bhead .sub { font-size: 12px; color: var(--faint); }
+  .bhead .btn { height: 28px; padding: 0 10px; font-size: 12px; }
 
   .empty {
     display: grid; place-items: center; gap: 10px; padding: 60px 20px; text-align: center;
@@ -213,6 +224,10 @@
         <div class="lbl">Invite link</div>
         <input type="text" id="link" placeholder="paste invite link" spellcheck="false">
       </div>
+      <div class="bot-label">
+        <div class="lbl">Label</div>
+        <input type="text" id="botLabel" maxlength="40" spellcheck="false">
+      </div>
       <div class="count">
         <div class="lbl">Bots</div>
         <input type="number" id="count" min="1" max="50" value="2">
@@ -244,7 +259,7 @@
       <span id="emptyText">Paste the invite link, choose how many bots, and send them in.</span>
     </div>
 
-    <div class="grid" id="cards"></div>
+    <div id="cards"></div>
   </div>
 </main>
 
@@ -285,7 +300,17 @@ const post = async (url, body) => {
   return data
 }
 
-const S = { state: null, cards: new Map(), errorShown: null, camOn: true, micOn: true }
+const S = { state: null, cards: new Map(), groups: new Map(), errorShown: null, camOn: true, micOn: true }
+
+/* ---------- saved label ---------- */
+const LABEL_STORAGE_KEY = 'call-bots-label'
+const botLabelInput = $('#botLabel')
+try { botLabelInput.value = localStorage.getItem(LABEL_STORAGE_KEY) ?? '' }
+catch { /* storage can be unavailable in a restricted browser */ }
+botLabelInput.oninput = () => {
+  try { localStorage.setItem(LABEL_STORAGE_KEY, botLabelInput.value) }
+  catch { /* keep the input usable even when storage is unavailable */ }
+}
 
 /* ---------- what bots join with ---------- */
 // Only the state they arrive in — every bot still carries its clip and voice,
@@ -308,24 +333,29 @@ for (const device of devices) {
 $('#goBtn').onclick = async () => {
   const btn = $('#goBtn')
   const guests = Math.max(1, Number($('#count').value) || 1)
+  const botLabel = $('#botLabel').value.trim()
   const running = S.state?.status === 'running'
-  const label = btn.textContent
+  const buttonLabel = btn.textContent
   btn.disabled = true
   btn.textContent = 'Sending…'
   try {
     if (running) {
-      const res = await post('/api/add', { guests, camera: S.camOn, mic: S.micOn })
-      toast(`${res.added} bot(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
+      const res = await post('/api/add', {
+        guests, label: botLabel, camera: S.camOn, mic: S.micOn,
+      })
+      if (res.removed) toast('that batch was removed while it was still arriving', '-warn')
+      else toast(`${res.added} bot(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
     } else {
       await post('/api/start', {
-        link: $('#link').value.trim(), guests, camera: S.camOn, mic: S.micOn,
+        link: $('#link').value.trim(), guests, label: botLabel,
+        camera: S.camOn, mic: S.micOn,
       })
     }
   } catch (error) {
     toast(error.message, '-err')
   } finally {
     btn.disabled = false
-    btn.textContent = label
+    btn.textContent = buttonLabel
   }
 }
 $('#link').onkeydown = (event) => { if (event.key === 'Enter') $('#goBtn').click() }
@@ -350,6 +380,42 @@ for (const btn of document.querySelectorAll('[data-all]')) {
     catch (error) { toast(error.message, '-err') }
     finally { btn.disabled = false }
   }
+}
+
+/* ---------- batches: the bots of one send, shown and removed together ---------- */
+const clock = (at) =>
+  new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+const removeBatch = async (id, btn) => {
+  btn.dataset.busy = '1'
+  btn.disabled = true
+  const label = btn.textContent
+  btn.textContent = 'Removing…'
+  try {
+    await post('/api/action', { slug: `batch:${id}`, action: 'leave' })
+  } catch (error) {
+    toast(error.message, '-err')
+  } finally {
+    delete btn.dataset.busy
+    btn.disabled = false
+    btn.textContent = label
+  }
+}
+
+const buildGroup = (batch) => {
+  const group = el('div', 'batch')
+  group.dataset.batch = batch.id
+  group.innerHTML = `
+    <div class="bhead">
+      <span class="nm">Batch ${esc(batch.id)}</span>
+      <span class="sub"></span>
+      <span class="spacer"></span>
+      <button class="btn -danger" data-batch-remove
+        title="Remove every bot that came in with this batch">Remove batch</button>
+    </div>
+    <div class="grid"></div>`
+  $('[data-batch-remove]', group).onclick = (event) => removeBatch(batch.id, event.currentTarget)
+  return group
 }
 
 /* ---------- bot cards ---------- */
@@ -409,12 +475,12 @@ const STATE_LABEL = {
   created: 'queued', ready: 'left', joining: 'joining',
   'in-call': 'in call', leaving: 'leaving', closed: 'closed',
 }
-const updateCard = (guest) => {
+const updateCard = (guest, grid) => {
   let card = S.cards.get(guest.slug)
   if (!card) {
     card = buildCard(guest)
     S.cards.set(guest.slug, card)
-    $('#cards').append(card)
+    grid.append(card)
   }
   const failed = guest.state.startsWith('error')
   const base = failed ? 'error' : guest.state
@@ -469,13 +535,17 @@ const refreshThumbs = () => {
 const render = (state) => {
   S.state = state
   const running = state.status === 'running'
-  const busy = state.status === 'joining' || state.status === 'stopping'
+  const joining = state.status === 'joining'
+  const busy = joining || state.status === 'stopping'
 
   const pill = $('#statusPill')
   pill.textContent = state.status
   pill.className = `pill -${state.status}`
 
-  $('#stopBtn').hidden = !running
+  // A session mid-join is already a session to stop: one bot stuck in an
+  // admission lobby holds "joining" for up to ten minutes, and hiding Stop for
+  // all of it leaves the window with no way out.
+  $('#stopBtn').hidden = !running && !joining
   $('#allbar').hidden = !running
   $('#goBtn').textContent = running ? 'Add bots' : 'Send bots'
   $('#goBtn').disabled = busy
@@ -505,8 +575,32 @@ const render = (state) => {
   }
 
   const guests = state.session?.guests ?? []
+  const batches = state.session?.batches ?? []
   $('#empty').hidden = guests.length > 0
-  for (const guest of guests) updateCard(guest)
+  for (const batch of batches) {
+    let group = S.groups.get(batch.id)
+    if (!group) {
+      group = buildGroup(batch)
+      S.groups.set(batch.id, group)
+      // Batch ids only ever grow, so appending keeps the groups in the order
+      // they were sent — and leaves the ones already on screen where they are.
+      $('#cards').append(group)
+    }
+    const mine = guests.filter((guest) => guest.batch === batch.id)
+    $('.bhead .sub', group).textContent =
+      `${mine.length} bot${mine.length === 1 ? '' : 's'} · sent ${clock(batch.at)}`
+    // Removing a batch takes as long as closing its browsers; a snapshot
+    // arriving meanwhile must not hand the button back mid-request.
+    const remove = $('[data-batch-remove]', group)
+    if (!remove.dataset.busy) remove.disabled = !running
+    for (const guest of mine) updateCard(guest, $('.grid', group))
+  }
+  for (const [id, group] of S.groups) {
+    if (!batches.some((batch) => batch.id === id)) {
+      group.remove()
+      S.groups.delete(id)
+    }
+  }
   for (const [slug, card] of S.cards) {
     if (!guests.some((guest) => guest.slug === slug)) {
       card.remove()

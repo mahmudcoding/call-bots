@@ -133,6 +133,12 @@ const json = (response, status, body) => {
   response.end(JSON.stringify(body))
 }
 
+const botLabel = (value) =>
+  String(value ?? '')
+    .trim()
+    .replace(/\s+/gu, ' ')
+    .slice(0, 40)
+
 // Send the first bots in. The link carries the platform, the origin and the
 // call itself, so there is nothing else to configure.
 const startSession = async (body) => {
@@ -148,6 +154,7 @@ const startSession = async (body) => {
     noAudio: Boolean(body.noAudio),
     startCam: body.camera !== false,
     startMic: body.mic !== false,
+    label: botLabel(body.label),
     size: '1920x1080',
     fps: 12,
   })
@@ -159,20 +166,38 @@ const startSession = async (body) => {
   thumbCache.clear()
 
   ;(async () => {
+    // Stop can arrive while the batch is still joining. From that moment
+    // stopSession owns the session state, and finishing up here anyway would
+    // clobber it — a spurious "no bot reached the call" after a deliberate
+    // stop, or the status flipped back to running with no roster left to stop.
+    const stopped = () => session.roster !== roster || roster.tearingDown
+    // The cleanup paths below tear the roster down themselves, which trips
+    // tearingDown — after that, only identity says whether this continuation
+    // still owns the session. Cleanup also holds status at 'stopping': going
+    // idle first would invite a retry whose fresh session the mutations after
+    // the await would then wipe.
+    const owns = () => session.roster === roster
     try {
       const result = await roster.add(count, target)
-      session.status = roster.inCall().length > 0 ? 'running' : 'idle'
+      if (stopped()) return
       if (roster.inCall().length === 0) {
+        session.status = 'stopping'
         session.lastError = 'no bot reached the call'
         await roster.teardownAll().catch(() => {})
+        if (!owns()) return
+        session.status = 'idle'
         session.roster = null
-      } else if (result.failed) {
-        log.warn(`${result.failed} bot(s) failed to join`)
+      } else {
+        session.status = 'running'
+        if (result.failed) log.warn(`${result.failed} bot(s) failed to join`)
       }
     } catch (error) {
+      if (stopped()) return
       log.error(error.message)
+      session.status = 'stopping'
       session.lastError = error.message
       await roster.teardownAll().catch(() => {})
+      if (!owns()) return
       session.status = 'idle'
       session.roster = null
     }
@@ -181,20 +206,46 @@ const startSession = async (body) => {
 }
 
 const stopSession = async () => {
-  if (!session.roster || session.status === 'stopping') return
+  const roster = session.roster
+  if (!roster || session.status === 'stopping') return
   session.status = 'stopping'
+  // Take ownership before the first await: teardownAll flags tearingDown
+  // synchronously, which halts queued launches and stands down the join
+  // continuation in startSession. Broadcasting first would leave a gap of
+  // seconds in which both could still act on the session being stopped.
+  const teardown = roster.teardownAll().catch((error) => log.warn(error.message))
   broadcast(await stateSnapshot())
-  await session.roster.teardownAll().catch((error) => log.warn(error.message))
+  await teardown
   session.roster = null
   session.verify = null
   session.status = 'idle'
   broadcast(await stateSnapshot())
 }
 
+// Bots are sent in more than once, so "all" is not the only group there is:
+// `batch:<n>` addresses one send — the bots that arrived together.
+const batchTarget = (slug) => {
+  const match = /^batch:(\d+)$/u.exec(String(slug ?? ''))
+  return match ? Number(match[1]) : null
+}
+
 const runAction = async (slug, action) => {
   const roster = session.roster
   if (!roster || session.status !== 'running') throw new Error('no running session')
-  const targets = slug === 'all' ? roster.inCall() : [roster.bySlug(slug)].filter(Boolean)
+  const batch = batchTarget(slug)
+  // Removing a batch is one gesture, not one per bot: the roster closes them
+  // together, and it owns the group while a batch still arriving is taken out.
+  if (batch !== null && action === 'leave') {
+    const removed = await roster.removeBatch(batch)
+    if (removed.length === 0) throw new Error(`no bot for "${slug}"`)
+    return Object.fromEntries(removed.map((label) => [label, 'removed']))
+  }
+  const targets =
+    slug === 'all'
+      ? roster.inCall()
+      : batch !== null
+        ? roster.byBatch(batch).filter((guest) => guest.state === 'in-call')
+        : [roster.bySlug(slug)].filter(Boolean)
   if (targets.length === 0) throw new Error(`no bot for "${slug}"`)
   const results = {}
   for (const guest of targets) {
@@ -304,6 +355,7 @@ export const startServer = async ({ port = 4610, open = true }) => {
         const result = await session.roster.add(count, null, {
           startCam: body.camera !== false,
           startMic: body.mic !== false,
+          label: botLabel(body.label),
         })
         broadcast(await stateSnapshot())
         json(response, 200, { ok: true, ...result })

@@ -49,9 +49,16 @@ export class Roster {
     this.options.runDir = this.runDir
     this.guests = []
     this.counter = 0
+    // Bots are sent in more than once — five now, seven when the call fills up.
+    // Each send is its own batch, so the window can show them as the groups
+    // they arrived in and take a whole group back out in one go.
+    this.batches = []
+    this.batchCounter = 0
     this.target = null
     this.meetingId = null
     this.tearingDown = false
+    this.activeAdds = new Set()
+    this.teardownPromise = null
   }
 
   get callUrl() {
@@ -68,7 +75,11 @@ export class Roster {
       baseUrl: this.options.baseUrl,
       platform: this.target?.platform ?? null,
       meetingId: this.meetingId,
-      guests: this.guests.map((guest) => ({ label: guest.label, state: guest.state })),
+      guests: this.guests.map((guest) => ({
+        label: guest.label,
+        state: guest.state,
+        batch: guest.batch?.id ?? null,
+      })),
       ...extra,
     })
   }
@@ -81,28 +92,56 @@ export class Roster {
     return this.guests.find((guest) => guest.user.slug === slug) ?? null
   }
 
+  byBatch(id) {
+    return this.guests.filter((guest) => guest.batch?.id === id)
+  }
+
   // Sends `count` more bots into the call. The first call sets the target.
   // `overrides` applies to this batch only, so bots added later can arrive with
   // their camera or microphone in a different state from the ones already in.
-  async add(count, target = null, overrides = null) {
+  add(count, target = null, overrides = null) {
+    if (this.tearingDown) return Promise.reject(new Error('roster is stopping'))
+    // The record exists before the first await so a batch can be removed from
+    // the moment it is asked for, not only once its bots have been built.
+    this.batchCounter += 1
+    const batch = { id: this.batchCounter, at: Date.now(), removed: false, operation: null }
+    this.batches.push(batch)
+    const operation = this.#add(count, batch, target, overrides)
+    batch.operation = operation
+    this.activeAdds.add(operation)
+    operation.then(
+      () => this.activeAdds.delete(operation),
+      () => this.activeAdds.delete(operation),
+    )
+    return operation
+  }
+
+  async #add(count, batch, target = null, overrides = null) {
     if (target) this.target = target
     if (!this.target) throw new Error('no call link — paste the call link first')
 
     const total = this.guests.length + count
     const warning = concurrencyWarning(total)
     if (warning) log.warn(warning)
+    const label = String(overrides?.label ?? this.options.label ?? '').trim()
 
-    const batch = Array.from({ length: count }, () => {
+    const users = Array.from({ length: count }, () => {
       this.counter += 1
       const n = this.counter
-      return { n, index: n - 1, label: `Bot ${n}`, slug: `bot-${n}` }
+      return {
+        n,
+        index: n - 1,
+        label: `${label ? `${label} ` : ''}Bot ${n}`,
+        slug: `bot-${n}`,
+      }
     })
-    log.info(`preparing ${batch.length} bot(s)`)
-    const media = await ensureGuestFixtures(batch, this.options)
+    log.info(`preparing ${users.length} bot(s)`)
+    const media = await ensureGuestFixtures(users, this.options)
     // Every browser in a batch competes with the ones still starting, so the
     // size of the batch is part of how long anything takes.
     const options = { ...this.options, ...(overrides ?? {}), batchSize: total }
-    const guests = batch.map((guest) => new Guest(guest, media.get(guest.slug), options))
+    const guests = users.map((user) => new Guest(user, media.get(user.slug), options))
+    for (const guest of guests) guest.batch = batch
     this.guests.push(...guests)
     this.#manifest()
 
@@ -116,9 +155,18 @@ export class Roster {
     await pool(
       guests,
       async (guest) => {
+        // A stop while bots are still queued has to be terminal: a browser
+        // launched after teardownAll has swept would outlive the stop and
+        // walk into the call as a ghost nobody can remove. Removing this batch
+        // is the same promise held over one group instead of all of them.
+        if (this.tearingDown || batch.removed) return
         guest.log.info('launching browser')
         try {
           await guest.start()
+          if (this.tearingDown || batch.removed) {
+            await guest.teardown().catch(() => {})
+            return
+          }
           launched.push(guest)
         } catch (error) {
           failed(guest, error)
@@ -129,6 +177,7 @@ export class Roster {
 
     await Promise.all(
       launched.map(async (guest) => {
+        if (this.tearingDown || batch.removed) return
         try {
           await guest.join(this.target)
           this.meetingId ??= guest.meetingId
@@ -139,7 +188,15 @@ export class Roster {
     )
     for (const { item, error } of failures) item.log.error(error.message)
     this.#manifest()
-    return { added: guests.length - failures.length, failed: failures.length }
+    // A batch taken out while it was still arriving added nothing that lasted,
+    // so it must not report bots as joined that the user has already removed.
+    if (batch.removed) return { batch: batch.id, added: 0, failed: 0, removed: true }
+    return {
+      batch: batch.id,
+      added: guests.length - failures.length,
+      failed: failures.length,
+      removed: false,
+    }
   }
 
   // A bot that leaves is gone: close its browser and drop it from the roster
@@ -151,6 +208,39 @@ export class Roster {
     this.guests = this.guests.filter((candidate) => candidate !== guest)
     this.#manifest()
     return true
+  }
+
+  // The batch button: the bots that arrived together leave together, and the
+  // group they were shown in stops existing. Returns the labels removed.
+  async removeBatch(id) {
+    const batch = this.batches.find((candidate) => candidate.id === id)
+    if (!batch) return []
+    // Flag it before closing anything: a batch can be removed while it is still
+    // arriving, and every launch still queued in its add stands down on this
+    // rather than walking a browser into the call after its group is gone.
+    batch.removed = true
+    const removed = new Set()
+    const close = async () => {
+      const mine = this.guests.filter((guest) => guest.batch === batch)
+      for (const guest of mine) removed.add(guest)
+      await Promise.all(
+        mine
+          .filter((guest) => guest.state !== 'closed')
+          .map((guest) =>
+            guest.teardown().catch((error) => guest.log.warn(`teardown failed: ${error.message}`)),
+          ),
+      )
+    }
+    await close()
+    // Closing the browsers above fails any join still in flight, so the add
+    // settles from here rather than sitting in an admission lobby. Wait for it —
+    // it closes whatever it started — then take anything left standing.
+    await batch.operation?.catch(() => {})
+    await close()
+    this.guests = this.guests.filter((guest) => guest.batch !== batch)
+    this.batches = this.batches.filter((candidate) => candidate !== batch)
+    this.#manifest()
+    return [...removed].map((guest) => guest.label)
   }
 
   // Asking each bot in turn costs a round trip per bot per poll, which stops
@@ -176,6 +266,7 @@ export class Roster {
           label: guest.label,
           color: guestColorHex((guest.user.n - 1) % THEME_COUNT),
           state: guest.state,
+          batch: guest.batch?.id ?? null,
           mic,
           cam,
           screen,
@@ -183,7 +274,22 @@ export class Roster {
         }
       }),
     )
-    return { meetingId: this.meetingId, inviteLink: this.callUrl, platform: this.platform, guests }
+    // Only groups that still hold bots: a batch emptied one card at a time, or
+    // one that failed before it built anything, is not a group any more.
+    const batches = this.batches
+      .map((batch) => ({
+        id: batch.id,
+        at: batch.at,
+        size: this.guests.filter((guest) => guest.batch === batch).length,
+      }))
+      .filter((batch) => batch.size > 0)
+    return {
+      meetingId: this.meetingId,
+      inviteLink: this.callUrl,
+      platform: this.platform,
+      batches,
+      guests,
+    }
   }
 
   // One bot checks that the other tiles really render — buttons are not proof.
@@ -194,9 +300,14 @@ export class Roster {
     return { verifier: verifier.label, remote, at: Date.now() }
   }
 
-  async teardownAll() {
-    if (this.tearingDown) return
+  teardownAll() {
+    if (this.teardownPromise) return this.teardownPromise
     this.tearingDown = true
+    this.teardownPromise = this.#finishTeardown()
+    return this.teardownPromise
+  }
+
+  async #finishTeardown() {
     log.info('closing bots…')
     await Promise.all(
       this.guests.map((guest) =>
@@ -204,6 +315,16 @@ export class Roster {
           guest.teardown(),
           new Promise((resolve) => setTimeout(resolve, 30_000)),
         ]).catch((error) => guest.log.warn(`teardown failed: ${error.message}`)),
+      ),
+    )
+    await this.#sweep()
+    // A browser launch already in progress may react to the first sweep by
+    // trying its fallback channel. Do not report Stop as complete until every
+    // add operation has observed tearingDown and closed anything it launched.
+    await Promise.allSettled([...this.activeAdds])
+    await Promise.all(
+      this.guests.filter((guest) => guest.state !== 'closed').map((guest) =>
+        guest.teardown().catch((error) => guest.log.warn(`teardown failed: ${error.message}`)),
       ),
     )
     await this.#sweep()

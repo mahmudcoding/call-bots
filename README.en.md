@@ -60,8 +60,22 @@ replace the camera clips. Sources and licences are in
   was previously *On request*, send the bots again: Aloqa does not lift that one
   for anyone already in the call.
 - **A Mac app**, if you would rather not use a terminal: `npm run build:app`
-  builds `dist/call_bots.zip` (Apple Silicon). Recipients right-click → Open the
-  first time, because it is ad-hoc signed.
+  builds a versioned ZIP in `dist/` (Apple Silicon). Version `0.3.0` must be
+  installed manually once and opened with right-click → Open because it is
+  ad-hoc signed. After that the app checks daily; use **Call Bots → Check for
+  Updates…** to check immediately.
 - **Selector drift** after an Aloqa deploy is fixed in one file,
   `src/platforms/aloqa.mjs`. `npm run test:platforms` checks the adapter against
   a mock of that DOM.
+
+## Releasing a Mac version
+
+From a clean `main` branch, pass the new version to one command:
+
+```bash
+npm run release:mac -- 0.3.0
+```
+
+It runs the tests, builds and signs the ZIP and `appcast.xml`, then publishes
+both as GitHub Release assets. Installed apps read the feed from the stable
+`releases/latest/download/appcast.xml` URL.

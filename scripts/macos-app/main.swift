@@ -2,6 +2,7 @@
 // server and presents the UI in its own WKWebView window. Compiled by
 // scripts/build-macos-app.mjs with `swiftc -swift-version 5`.
 import Cocoa
+import Sparkle
 import WebKit
 
 let port = ProcessInfo.processInfo.environment["CALL_BOTS_PORT"] ?? "4610"
@@ -12,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
   var webView: WKWebView!
   var server: Process?
   var quitting = false
+  private let updaterController = SPUStandardUpdaterController(
+    startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
   // MARK: lifecycle
 
@@ -74,6 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     let appItem = NSMenuItem()
     main.addItem(appItem)
     let appMenu = NSMenu()
+    let updateItem = NSMenuItem(
+      title: "Check for Updates…",
+      action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+      keyEquivalent: "")
+    updateItem.target = updaterController
+    appMenu.addItem(updateItem)
+    appMenu.addItem(.separator())
     appMenu.addItem(
       NSMenuItem(title: "Quit Call Bots",
                  action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))

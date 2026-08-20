@@ -9,9 +9,11 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
+import { prepareSparkle } from './sparkle.mjs'
+import { UPDATE } from './update-config.mjs'
+
 const NODE_VERSION = '22.12.0'
 const APP_NAME = 'Call Bots'
-const BUNDLE_ID = 'com.aloqa.call-bots'
 
 if (process.platform !== 'darwin') {
   console.error('the .app can only be built on macOS')
@@ -39,6 +41,12 @@ mkdirSync(join(resources, 'app'), { recursive: true })
 mkdirSync(join(resources, 'node', 'bin'), { recursive: true })
 mkdirSync(cacheDir, { recursive: true })
 
+const sparkle = await prepareSparkle(cacheDir, step)
+const frameworks = join(contents, 'Frameworks')
+mkdirSync(frameworks, { recursive: true })
+step('embedding Sparkle.framework')
+run('ditto', [sparkle.framework, join(frameworks, 'Sparkle.framework')])
+
 // --- 2. Info.plist + launcher ------------------------------------------------
 writeFileSync(
   join(contents, 'Info.plist'),
@@ -48,7 +56,7 @@ writeFileSync(
 <dict>
   <key>CFBundleName</key><string>${APP_NAME}</string>
   <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
-  <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
+  <key>CFBundleIdentifier</key><string>${UPDATE.bundleId}</string>
   <key>CFBundleVersion</key><string>${version}</string>
   <key>CFBundleShortVersionString</key><string>${version}</string>
   <key>CFBundleExecutable</key><string>CallBots</string>
@@ -56,6 +64,14 @@ writeFileSync(
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>SUFeedURL</key><string>${UPDATE.feedUrl}</string>
+  <key>SUPublicEDKey</key><string>${UPDATE.publicEdKey}</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>${UPDATE.scheduledCheckInterval}</integer>
+  <key>SUAutomaticallyUpdate</key><false/>
+  <key>SUAllowsAutomaticUpdates</key><false/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
+  <key>SURequireSignedFeed</key><true/>
 </dict>
 </plist>
 `,
@@ -73,6 +89,10 @@ run('swiftc', [
   '-O',
   '-swift-version', '5',
   '-target', `${arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos12.0`,
+  '-F', sparkle.root,
+  '-framework', 'Sparkle',
+  '-Xlinker', '-rpath',
+  '-Xlinker', '@executable_path/../Frameworks',
   '-o', join(contents, 'MacOS', 'CallBots'),
   join(projectRoot, 'scripts', 'macos-app', 'main.swift'),
 ])
@@ -177,10 +197,14 @@ run('iconutil', ['-c', 'icns', iconset, '-o', join(resources, 'AppIcon.icns')])
 
 // --- 6. sign (ad-hoc) + zip --------------------------------------------------
 step('ad-hoc code signing')
-run('codesign', ['--force', '--deep', '--sign', '-', appRoot])
+// Sparkle ships with valid nested signatures. Preserve them and sign only our
+// outer bundle; --deep signing here would rewrite Sparkle's own helpers.
+run('codesign', ['--verify', '--deep', '--strict', join(frameworks, 'Sparkle.framework')])
+run('codesign', ['--force', '--sign', '-', appRoot])
+run('codesign', ['--verify', '--deep', '--strict', appRoot])
 
 step('zipping')
-const zipPath = join(dist, 'call_bots.zip')
+const zipPath = join(dist, `Call-Bots-${version}-macOS-${arch}.zip`)
 rmSync(zipPath, { force: true })
 run('ditto', ['-c', '-k', '--keepParent', appRoot, zipPath])
 
