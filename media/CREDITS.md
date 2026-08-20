@@ -26,18 +26,17 @@ the original 16 kHz mono.
 
 ## Shared screen
 
-`screen.webm` is the footage a bot shares when it shares a screen: banner fish
-over a coral reef.
+`screen.webm` is the footage a bot shares when it shares a screen: a bumblebee
+on an Indian Blanket flower in a wildflower meadow.
 
-- Source: Wikimedia Commons — https://commons.wikimedia.org/wiki/File:Tropical_Fish_Banner_Fish_on_Coral_Reef.webm
-- Author: underwatercam
-- Licence: Creative Commons Attribution 3.0 (CC BY 3.0)
-- https://creativecommons.org/licenses/by/3.0/
+- Source: Wikimedia Commons — https://commons.wikimedia.org/wiki/File:Flowers_(20210715-FPAC-KLS-0001).webm
+- Author: USDAgov
+- Licence: Public domain (work of the U.S. federal government)
 
-Changes made: retimed from 25 to 30 fps so every frame is shown once at even
-spacing — capturing 25 fps content at 30 duplicates frames unevenly and judders.
-Saturation and contrast lifted slightly, the tail dissolved into the head so it
-loops without a cut, and re-encoded to VP9. 1920x1080, 10.9s, no audio.
+Changes made: cropped from 1920x1300 to 1920x1080 to drop the letterbox bars
+and a burned-in caption, trimmed to 16s, saturation lifted slightly, the tail
+dissolved into the head so it loops without a cut, and re-encoded to VP9.
+Already 30fps at source, so no retiming was needed. No audio.
 
 ## Clips
 
