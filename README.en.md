@@ -62,8 +62,9 @@ replace the camera clips. Sources and licences are in
 - **A Mac app**, if you would rather not use a terminal: `npm run build:app`
   builds a versioned ZIP in `dist/` (Apple Silicon). Version `0.3.0` must be
   installed manually once and opened with right-click → Open because it is
-  ad-hoc signed. After that the app checks daily; use **Call Bots → Check for
-  Updates…** to check immediately.
+  ad-hoc signed. After that the app checks every time it opens and once daily
+  while it stays open; use **Call Bots → Check for Updates…** to check
+  immediately.
 - **Selector drift** after an Aloqa deploy is fixed in one file,
   `src/platforms/aloqa.mjs`. `npm run test:platforms` checks the adapter against
   a mock of that DOM.

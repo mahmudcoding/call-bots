@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
   func applicationDidFinishLaunching(_ note: Notification) {
     buildMenu()
     buildWindow()
+    // Check once on every launch. The scheduled daily check still covers the
+    // uncommon case where someone leaves Call Bots open for several days.
+    updaterController.updater.checkForUpdatesInBackground()
     probe { running in
       DispatchQueue.main.async {
         if running {
