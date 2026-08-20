@@ -4,6 +4,7 @@
 # already done. Works on macOS and on Ubuntu.
 #
 #   ./run.sh --link "https://…/join/<token>" --bots 10 --camera off --mic off
+#   ./run.sh --link "https://…/join/<token>" --bots 3 --share 1
 #   ./run.sh --link "https://…/join/<token>" --ui     # dashboard on :4610
 #   ./run.sh --check                                  # set up, send no bots
 #   ./run.sh --clean                                  # remove everything it made
@@ -24,7 +25,7 @@ case "$(uname -s)" in
 esac
 PREFIX="$ROOT/.server"
 
-LINK=""; BOTS=2; CAMERA=on; MIC=on; MODE=join
+LINK=""; BOTS=2; CAMERA=on; MIC=on; SHARE=""; MODE=join
 PORT=4610; SYSTEM_DEPS=1; CHECK_ONLY=0; DO_CLEAN=0
 
 die()  { printf '\n\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -37,6 +38,7 @@ while [ $# -gt 0 ]; do
     --bots)     BOTS="${2:-}"; shift 2 ;;
     --camera)   CAMERA="${2:-}"; shift 2 ;;
     --mic)      MIC="${2:-}"; shift 2 ;;
+    --share)    SHARE="${2:-}"; shift 2 ;;
     --port)     PORT="${2:-}"; shift 2 ;;
     --ui)       MODE=ui; shift ;;
     --check)    CHECK_ONLY=1; shift ;;
@@ -213,4 +215,5 @@ printf '\n'
 say "sending $BOTS bot(s) — camera $CAMERA, mic $MIC"
 say "the call needs entry mode Open: nobody is here to admit them"
 printf '\n'
-exec node src/cli.mjs join "$LINK" --bots "$BOTS" --camera "$CAMERA" --mic "$MIC"
+exec node src/cli.mjs join "$LINK" --bots "$BOTS" --camera "$CAMERA" --mic "$MIC" \
+  ${SHARE:+--share "$SHARE"}

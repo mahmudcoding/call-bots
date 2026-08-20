@@ -18,6 +18,7 @@ everything else into `./.server`, then sends the bots in. Run it again and it
 starts in about a second. Works on macOS and Ubuntu.
 
 ```bash
+./run.sh --link "<link>" --bots 3 --share 1                 # one bot shares its screen
 ./run.sh --link "<link>" --bots 10 --camera off --mic off   # arrive muted and dark
 ./run.sh --ui                                               # a window instead of the terminal
 ./run.sh --check                                            # set up, send no bots
@@ -54,7 +55,8 @@ replace the camera clips. Sources and licences are in
   that, CPU contention degrades the media itself.
 - **Getting in.** On entry mode **Open** bots walk straight in. On **Wait for
   admission** they queue in the lobby and wait up to ten minutes for you.
-- **Screen sharing** needs Meeting settings → Screen share → **Allowed**. If it
+- **Screen sharing** is `--share <n|all>` — that many bots start sharing once
+  they are in. It needs Meeting settings → Screen share → **Allowed**. If it
   was previously *On request*, send the bots again: Aloqa does not lift that one
   for anyone already in the call.
 - **A Mac app**, if you would rather not use a terminal: `npm run build:app`

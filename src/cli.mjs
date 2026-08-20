@@ -22,6 +22,7 @@ options:
   --bots <n>         how many bots to send (default 2)
   --headed           show the bot browser windows (default: headless)
   --browser <name>   chrome, chromium, or auto (default)
+  --share <n|all>    have that many bots share a screen once they are in
   --camera <on|off>  arrive with the camera on or off (default on)
   --mic <on|off>     arrive with the microphone on or off (default on)
   --no-video         attach no camera video at all (cheaper for a load run)
@@ -42,6 +43,7 @@ const parseCli = () => {
       guests: { type: 'string' },
       headed: { type: 'boolean', default: false },
       browser: { type: 'string', default: 'auto' },
+      share: { type: 'string' },
       camera: { type: 'string', default: 'on' },
       mic: { type: 'string', default: 'on' },
       'no-video': { type: 'boolean', default: false },
@@ -137,6 +139,19 @@ const main = async () => {
       process.exitCode = 1
       return
     }
+    // Screen share is a separate step: a bot has to be in the call before the
+    // control exists, and sharing from every bot at once is rarely what anyone
+    // wants — hence a count rather than a flag.
+    const inCall = roster.inCall()
+    const wanted = values.share === 'all' ? inCall.length : Math.max(0, Number(values.share) || 0)
+    for (const bot of inCall.slice(0, wanted)) {
+      const state = await bot.setScreen(true).catch(() => 'unknown')
+      if (state === 'on') bot.log.info('sharing a screen')
+      else if (state === 'blocked') {
+        bot.log.warn('this call blocks screen sharing — Meeting settings, Screen share, Allowed')
+      } else bot.log.warn(`screen share did not start (${state})`)
+    }
+
     log.info(`${result.added} bot(s) in call — Ctrl-C to end`)
     await new Promise(() => {}) // hold until interrupted
     return
