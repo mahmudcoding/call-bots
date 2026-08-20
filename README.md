@@ -50,10 +50,9 @@ Node, ffmpeg, or this repository.
    **Add bots** puts more into the same call; **Stop** ends the session and
    closes every browser.
 
-A bot has no desktop, so sharing a screen shares a page of its own: real
-footage of the Icelandic coast filling the frame, with a small caption naming
-the bot and a clock so you can tell whose screen it is and that the picture is
-live. The footage is captured at 1920x1080 — the resolution comes from the
+A bot has no desktop, so sharing a screen shares a page of its own: reef
+footage filling the frame, with a small caption naming the bot and a clock so
+you can tell whose screen it is and that the picture is live. The footage is captured at 1920x1080 — the resolution comes from the
 browser context's viewport, not from the page or the window — so what leaves
 the bot is genuinely full HD, and what each participant receives after that is
 LiveKit's adaptation.

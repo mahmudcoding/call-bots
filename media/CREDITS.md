@@ -26,16 +26,18 @@ the original 16 kHz mono.
 
 ## Shared screen
 
-`screen.webm` is the footage a bot shares when it shares a screen: waves on the
-black sand at Lækjavik beach, Iceland.
+`screen.webm` is the footage a bot shares when it shares a screen: banner fish
+over a coral reef.
 
-- Source: Wikimedia Commons — https://commons.wikimedia.org/wiki/File:Ocean_waves_at_L%C3%A6kjavik_beach,_Iceland.webm
-- Author: Alexander Grebenkov
+- Source: Wikimedia Commons — https://commons.wikimedia.org/wiki/File:Tropical_Fish_Banner_Fish_on_Coral_Reef.webm
+- Author: underwatercam
 - Licence: Creative Commons Attribution 3.0 (CC BY 3.0)
 - https://creativecommons.org/licenses/by/3.0/
 
-Changes made: re-encoded to VP9, and the clip is followed by itself reversed so
-it loops without a visible jump. 1920x1080, no audio.
+Changes made: retimed from 25 to 30 fps so every frame is shown once at even
+spacing — capturing 25 fps content at 30 duplicates frames unevenly and judders.
+Saturation and contrast lifted slightly, the tail dissolved into the head so it
+loops without a cut, and re-encoded to VP9. 1920x1080, 10.9s, no audio.
 
 ## Clips
 
