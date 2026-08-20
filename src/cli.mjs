@@ -9,18 +9,18 @@ import { Roster } from './orchestrator.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
 import { resolveLink } from './platforms/index.mjs'
 
-const USAGE = `Call Bots — put any number of guests into an Aloqa call
+const USAGE = `Call Bots — put any number of bots into an Aloqa call
 
 usage:
   call-bots ui [--port 4610]        open the app window (recommended)
-  call-bots join <invite-link>      send guests in from the terminal
+  call-bots join <invite-link>      send bots in from the terminal
   call-bots fixtures [--regen]      (re)generate the camera video and audio
   call-bots doctor                  check browser, speech, machine limits
-  call-bots clean                   kill leftover guest browser processes
+  call-bots clean                   kill leftover bot browser processes
 
 options:
-  --guests <n>       how many guests to send (default 2)
-  --headed           show the guest browser windows (default: headless)
+  --bots <n>         how many bots to send (default 2)
+  --headed           show the bot browser windows (default: headless)
   --browser <name>   chrome, chromium, or auto (default)
   --camera <on|off>  arrive with the camera on or off (default on)
   --mic <on|off>     arrive with the microphone on or off (default on)
@@ -30,13 +30,15 @@ options:
   --fps <n>          camera video frame rate (default 12)
   --regen            rebuild the media even if it is cached
 
-Guests need no accounts: the call's invite link is the only input.`
+Bots join as anonymous guests, so they need no accounts: the call's
+invite link is the only input.`
 
 const parseCli = () => {
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
     allowPositionals: true,
     options: {
+      bots: { type: 'string' },
       guests: { type: 'string' },
       headed: { type: 'boolean', default: false },
       browser: { type: 'string', default: 'auto' },
@@ -104,7 +106,7 @@ const main = async () => {
       n: i + 1,
       index: i,
       label: `Guest ${i + 1}`,
-      slug: `guest-${i + 1}`,
+      slug: `bot-${i + 1}`,
     }))
     await ensureGuestFixtures(sample, buildOptions(values, null))
     log.info('fixtures ready')
@@ -113,29 +115,29 @@ const main = async () => {
 
   if (command === 'join') {
     const link = positionals[0]
-    if (!link) throw new Error('usage: call-bots join <invite-link>')
+    if (!link) throw new Error('usage: call-bots join <invite-link> [--bots <n>]')
     const target = resolveLink(link)
-    const count = Number(values.guests) || 2
+    const count = Number(values.bots ?? values.guests) || 2
     const roster = new Roster(buildOptions(values, target.origin))
 
     let interrupted = 0
     const onSigint = () => {
       interrupted += 1
       if (interrupted > 1) process.exit(130)
-      console.error('\nCtrl-C — closing guests (again to force-quit)')
+      console.error('\nCtrl-C — closing bots (again to force-quit)')
       roster.teardownAll().then(() => process.exit(130))
     }
     process.on('SIGINT', onSigint)
 
-    log.info(`sending ${count} guest(s) into the call`)
+    log.info(`sending ${count} bot(s) into the call`)
     const result = await roster.add(count, target)
     if (roster.inCall().length === 0) {
-      log.error('no guest reached the call')
+      log.error('no bot reached the call')
       await roster.teardownAll()
       process.exitCode = 1
       return
     }
-    log.info(`${result.added} guest(s) in call — Ctrl-C to end`)
+    log.info(`${result.added} bot(s) in call — Ctrl-C to end`)
     await new Promise(() => {}) // hold until interrupted
     return
   }

@@ -1,9 +1,9 @@
 # Call Bots
 
-Put any number of **guests** into an Aloqa call from one computer. Each guest is
-a real browser that opens the call's invite link, types a name, and publishes
-real WebRTC audio and video from synthetic capture devices. At the product and
-server level they are ordinary anonymous participants.
+Put any number of **bots** into an Aloqa call from one computer. Each bot is a
+real browser that opens the call's invite link, types a name, and publishes real
+WebRTC audio and video from synthetic capture devices. They join as anonymous
+guests, so at the product and server level they are ordinary participants.
 
 No accounts, no workspace, nothing to provision: the invite link is the only
 input.
@@ -18,7 +18,7 @@ npm install
 npm start          # opens the app at http://127.0.0.1:4610
 ```
 
-`npm run doctor` checks the browser, speech engine, and how many guests this
+`npm run doctor` checks the browser, speech engine, and how many bots this
 machine can carry. On macOS, `npm run build:app` produces a double-click
 **Call Bots.app** (bundled Node runtime, no terminal needed).
 
@@ -67,7 +67,7 @@ Allowed**; while it is blocked the button renders disabled and the bot reports
 Terminal equivalent:
 
 ```bash
-node src/cli.mjs join "<invite-link>" --guests 4
+node src/cli.mjs join "<invite-link>" --bots 4
 ```
 
 ## What each bot publishes
@@ -150,9 +150,9 @@ that one can carry.
 - The realistic ceiling is what `doctor` reports for your machine (measured from
   RAM and cores, about 6 on a 16 GB laptop). Beyond it, CPU contention degrades
   the media itself.
-- The call must admit guests without approval (entry mode **Open**); otherwise
-  the app reports that the host needs to admit them.
-- Guests are anonymous, so each browser is always a fresh context — a signed-in
+- On entry mode **Open** bots walk straight in. On **Wait for admission** they
+  queue in the lobby and wait up to ten minutes for you to admit them.
+- Bots are anonymous guests, so each browser is always a fresh context — a signed-in
   cookie would make the invite page join as that account instead.
 - Aloqa lives in `src/platforms/aloqa.mjs`, holding its selectors, join
   sequence, device toggles and participant grid. Selector drift after a deploy
@@ -161,4 +161,4 @@ that one can carry.
   participant to be signed in cannot be driven this way at all.
 - `npm run test:platforms` drives every adapter against a page mimicking that
   platform's DOM. It catches a broken adapter, not a redesigned product.
-- `npm run clean` kills leftover guest browsers after a hard kill.
+- `npm run clean` kills leftover bot browsers after a hard kill.

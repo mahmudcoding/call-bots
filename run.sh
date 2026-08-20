@@ -200,4 +200,4 @@ printf '\n'
 say "sending $BOTS bot(s) — camera $CAMERA, mic $MIC"
 say "the call needs entry mode Open: nobody is here to admit them"
 printf '\n'
-exec node src/cli.mjs join "$LINK" --guests "$BOTS" --camera "$CAMERA" --mic "$MIC"
+exec node src/cli.mjs join "$LINK" --bots "$BOTS" --camera "$CAMERA" --mic "$MIC"
