@@ -397,7 +397,7 @@ const cardAction = async (slug, act, btn) => {
     const { results } = await post('/api/action', { slug, action })
     const result = results[guest.label]
     if (result === 'request') toast(`${guest.label}: the host restricted this device`, '-warn')
-    if (result === 'blocked') toast('This call does not allow screen sharing — turn it on in Meeting settings', '-warn')
+    if (result === 'blocked') toast('This call blocks screen sharing — set Meeting settings, Screen share to Allowed', '-warn')
   } catch (error) {
     toast(`${guest.label}: ${error.message}`, '-err')
   } finally {
@@ -437,7 +437,9 @@ const updateCard = (guest) => {
 
   const share = $('[data-act=share]', card)
   share.className = `ibtn${guest.screen === 'on' ? ' -live' : ''}${guest.screen === 'blocked' ? ' -off' : ''}${share.classList.contains('busy') ? ' busy' : ''}`
-  share.title = guest.screen === 'blocked' ? 'Screen sharing is off for this call' : 'Share a screen'
+  share.title = guest.screen === 'blocked'
+    ? 'This call blocks screen sharing — set Meeting settings, Screen share to Allowed'
+    : 'Share a screen'
   share.disabled = !inCall || guest.screen === 'blocked'
 
   $('[data-act=leave]', card).disabled = ['created', 'closed'].includes(guest.state)
