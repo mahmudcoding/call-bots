@@ -38,7 +38,21 @@ and a burned-in caption, trimmed to 16s, saturation lifted slightly, the tail
 dissolved into the head so it loops without a cut, and re-encoded to VP9.
 Already 30fps at source, so no retiming was needed. No audio.
 
-## Clips
+## Camera clips
 
-`clip-1` … `clip-5` are stock video of people at a desk, converted to MJPEG for
-Chrome's fake camera.
+`clip-1` … `clip-5` are stock video of five different people at a desk, used as
+each bot's camera. They were downloaded from Pexels by the project owner; the
+source files carried Pexels video IDs **5941016, 7261921, 7643836, 7706881,
+8048255** (https://www.pexels.com/video/<id>/). Which ID became which clip was
+not recorded.
+
+- Licence: Pexels License — https://www.pexels.com/license/
+  Free to use, attribution not required. Note its limits: do not sell unaltered
+  copies, and do not redistribute the footage on stock or wallpaper platforms.
+
+Changes made: scaled and cropped to 1920x1080, 30fps, 8s, encoded as MJPEG,
+which is the format Chrome's fake camera accepts.
+
+To replace them, put your own videos in a folder and run:
+
+    node scripts/import-videos.mjs <folder> --bundle
