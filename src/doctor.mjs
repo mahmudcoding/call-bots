@@ -56,6 +56,6 @@ export const runDoctor = async () => {
     console.log(` ${mark[String(check.ok)]} ${check.label.padEnd(8)} ${check.detail}`)
   }
   const healthy = checks.every((check) => check.ok !== false)
-  console.log(healthy ? '\nready — run: npm start' : '\nfix the ✗ items above, then re-run doctor')
+  console.log(healthy ? '\nready' : '\nfix the ✗ items above, then run this again')
   return healthy
 }

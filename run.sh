@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Call Bots on an Ubuntu server: one command sets everything up and sends the
-# bots in. Run it again and it starts immediately — each step checks first and
-# does nothing when it is already done.
+# Call Bots: one command sets everything up and sends the bots in. Run it again
+# and it starts immediately — each step checks first and does nothing when it is
+# already done. Works on macOS and on Ubuntu.
 #
 #   ./run.sh --link "https://…/join/<token>" --bots 10 --camera off --mic off
 #   ./run.sh --link "https://…/join/<token>" --ui     # dashboard on :4610
@@ -9,13 +9,19 @@
 #   ./run.sh --clean                                  # remove everything it made
 #
 # Everything it installs — its own Node, its own Chromium, its own npm cache and
-# run data — lives in ./.server, and --clean removes the lot. The exception is
-# Chromium's shared libraries, which only apt can provide: those are installed
-# system-wide, announced when it happens, and skipped with --no-deps.
+# run data — lives in ./.server, and --clean removes the lot. On Linux there is
+# one exception: Chromium's shared libraries, which only apt can provide. Those
+# are installed system-wide, announced when it happens, and skipped with
+# --no-deps. macOS needs no such thing.
 set -Eeuo pipefail
 
 NODE_VERSION=22.12.0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "$(uname -s)" in
+  Darwin) NODE_OS=darwin ;;
+  Linux)  NODE_OS=linux ;;
+  *)      printf 'run.sh supports macOS and Linux\n' >&2; exit 1 ;;
+esac
 PREFIX="$ROOT/.server"
 
 LINK=""; BOTS=2; CAMERA=on; MIC=on; MODE=join
@@ -77,10 +83,13 @@ as_root() {
 # --- 1. the handful of tools this script itself needs -------------------------
 ensure_tools() {
   local missing=()
-  for tool in curl tar xz; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+  # macOS tar reads .tar.xz without a separate xz binary; Linux needs xz-utils.
+  local needed=(curl tar)
+  [ "$NODE_OS" = linux ] && needed+=(xz)
+  for tool in "${needed[@]}"; do command -v "$tool" >/dev/null || missing+=("$tool"); done
   [ ${#missing[@]} -eq 0 ] && return 0
   [ "$SYSTEM_DEPS" = 1 ] || die "missing ${missing[*]} — install them, or drop --no-deps"
-  command -v apt-get >/dev/null || die "missing ${missing[*]} and this is not a Debian/Ubuntu machine"
+  command -v apt-get >/dev/null || die "missing ${missing[*]} — install them and run this again"
   say "installing ${missing[*]} (apt)"
   as_root apt-get update -qq || die "apt-get update failed — run this as root, or install ${missing[*]} yourself"
   as_root apt-get install -y -qq curl tar xz-utils ca-certificates \
@@ -95,11 +104,11 @@ ensure_node() {
     aarch64|arm64) NODE_ARCH=arm64 ;;
     *)             die "unsupported architecture: $(uname -m)" ;;
   esac
-  NODE_DIR="$PREFIX/node-v$NODE_VERSION-linux-$NODE_ARCH"
+  NODE_DIR="$PREFIX/node-v$NODE_VERSION-$NODE_OS-$NODE_ARCH"
   if [ ! -x "$NODE_DIR/bin/node" ]; then
-    say "downloading Node v$NODE_VERSION ($NODE_ARCH)"
+    say "downloading Node v$NODE_VERSION ($NODE_OS-$NODE_ARCH)"
     curl -fsSL -o "$PREFIX/node.tar.xz" \
-      "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$NODE_ARCH.tar.xz" \
+      "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$NODE_OS-$NODE_ARCH.tar.xz" \
       || die "could not download Node — is this machine online?"
     tar -xJf "$PREFIX/node.tar.xz" -C "$PREFIX"
     rm -f "$PREFIX/node.tar.xz"
@@ -141,6 +150,10 @@ browser_starts() {
 # --- 5. Chromium's system libraries, only if it will not start ----------------
 ensure_browser_runs() {
   if browser_starts; then ok "browser starts"; return 0; fi
+  if [ "$NODE_OS" != linux ]; then
+    sed -n '1,10p' "$PREFIX/browser-check.log" | sed 's/^/  /'
+    die "Chromium will not start"
+  fi
   if [ "$SYSTEM_DEPS" = 0 ]; then
     sed -n '1,10p' "$PREFIX/browser-check.log" | sed 's/^/  /'
     die "Chromium will not start and --no-deps was given"
