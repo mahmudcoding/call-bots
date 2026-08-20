@@ -99,7 +99,12 @@ export const launchGuest = async (guest, media, options) => {
   }
   const context = await browser.newContext({
     baseURL: options.baseUrl,
-    viewport: { width: 960, height: 540 },
+    // A shared screen is captured at the context's viewport — not at the size
+    // of the page being shared, and not at --window-size. So this is what
+    // decides whether a bot shares in full HD or in 540p upscaled to look like
+    // it. Everything else about a bot is unaffected by the larger surface: its
+    // camera comes from a file, not from rendering.
+    viewport: { width: 1920, height: 1080 },
   })
   await context.grantPermissions(['camera', 'microphone'], { origin: options.baseUrl })
   // A fixed budget fails a whole large batch at once: while fifty browsers are
