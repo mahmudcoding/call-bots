@@ -73,7 +73,12 @@ const buildArgs = (guest, media, options) => {
     '--mute-audio',
     `${RUN_MARKER}=${options.runId}`,
   ]
-  args.push(`--auto-select-desktop-capture-source=${SCREEN_TITLE}`)
+  // Tab sources only. The equivalent desktop flag makes Chrome enumerate
+  // screens and windows looking for the title, and on macOS enumerating screens
+  // needs the Screen Recording permission — so the user gets asked to hand the
+  // app their whole screen for a share that only ever captures one of its own
+  // tabs. This picks the same tab without going near the OS capture API.
+  args.push(`--auto-select-tab-capture-source-by-title=${SCREEN_TITLE}`)
   if (media && !options.noVideo) args.push(`--use-file-for-fake-video-capture=${media.video}`)
   if (media && !options.noAudio) args.push(`--use-file-for-fake-audio-capture=${media.audio}`)
   return args
