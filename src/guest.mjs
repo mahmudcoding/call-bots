@@ -1,8 +1,10 @@
+import { readFile } from 'node:fs/promises'
+
 import { launchGuest } from './browser.mjs'
 import { guestColorHex } from './fixtures.mjs'
 import { failureShot, mkLogger } from './log.mjs'
 import { platformById } from './platforms/index.mjs'
-import { screenHtml } from './screen.mjs'
+import { screenHtml, screenVideoPath } from './screen.mjs'
 
 // One anonymous participant: a real browser that opens the call link, types a
 // name, and publishes fake-device audio and video. No account, nothing to
@@ -143,7 +145,29 @@ export class Guest {
   async #prepareScreen() {
     if (this.screenPage && !this.screenPage.isClosed()) return this.screenPage
     const page = await this.context.newPage()
-    await page.setContent(screenHtml(this.label, guestColorHex(this.user.n - 1)))
+    const video = screenVideoPath()
+    // Served from a path on the call's own origin that nothing else uses, so
+    // the page and its footage are same-origin and no other request is touched.
+    const base = `${this.options.baseUrl}/__call-bots-screen`
+    await page.route(`${base}*`, async (route) => {
+      if (route.request().url().includes('asset=video') && video) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'video/webm',
+          body: await readFile(video),
+        })
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/html; charset=utf-8',
+        body: screenHtml(
+          this.label,
+          guestColorHex(this.user.n - 1),
+          video ? `${base}?asset=video` : null,
+        ),
+      })
+    })
+    await page.goto(base)
     await this.page.bringToFront()
     this.screenPage = page
     return page

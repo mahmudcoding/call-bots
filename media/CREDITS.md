@@ -24,6 +24,19 @@ Changes made: a section of each channel was extracted, silence between that
 speaker's turns removed, loudness normalised, and the result trimmed. Kept at
 the original 16 kHz mono.
 
+## Shared screen
+
+`screen.webm` is the footage a bot shares when it shares a screen: waves on the
+black sand at Lækjavik beach, Iceland.
+
+- Source: Wikimedia Commons — https://commons.wikimedia.org/wiki/File:Ocean_waves_at_L%C3%A6kjavik_beach,_Iceland.webm
+- Author: Alexander Grebenkov
+- Licence: Creative Commons Attribution 3.0 (CC BY 3.0)
+- https://creativecommons.org/licenses/by/3.0/
+
+Changes made: re-encoded to VP9, and the clip is followed by itself reversed so
+it loops without a visible jump. 1920x1080, no audio.
+
 ## Clips
 
 `clip-1` … `clip-5` are stock video of people at a desk, converted to MJPEG for

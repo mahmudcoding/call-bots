@@ -50,10 +50,16 @@ Node, ffmpeg, or this repository.
    **Add bots** puts more into the same call; **Stop** ends the session and
    closes every browser.
 
-A bot has no desktop, so sharing a screen shares a page of its own: a live
-clock, moving bars and fine text, in that bot's colour. It is deliberately
-detailed — the thin lines and small text are the first things to go when a
-video codec is starved, so a squeezed share is obvious on the receiving end.
+A bot has no desktop, so sharing a screen shares a page of its own: real
+footage of the Icelandic coast filling the frame, with a small caption naming
+the bot and a clock so you can tell whose screen it is and that the picture is
+live. The footage is captured at 1920x1080 — the resolution comes from the
+browser context's viewport, not from the page or the window — so what leaves
+the bot is genuinely full HD, and what each participant receives after that is
+LiveKit's adaptation.
+
+Drop your own `screen.webm` in the fixtures folder to share something else; it
+wins over the one that ships, the same way imported camera clips do.
 
 The call has to permit it. In Aloqa that is **Meeting settings › Screen share ›
 Allowed**; while it is blocked the button renders disabled and the bot reports
