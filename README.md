@@ -45,10 +45,19 @@ Node, ffmpeg, or this repository.
    **Mic** on, then press **Send bots**. Those toggles set the state a bot
    joins in; every bot still carries its clip and voice, so one switched on
    later publishes real footage rather than an empty tile.
-3. Guests appear as cards with a live view of what each one sees. Mute, toggle
-   cameras, share a screen, or remove a guest — individually or for all of them.
-   **Add guests** puts more into the same call; **Stop** ends the session and
+3. Bots appear as cards with a live view of what each one sees. Mute, toggle
+   cameras, share a screen, or remove a bot — individually or for all of them.
+   **Add bots** puts more into the same call; **Stop** ends the session and
    closes every browser.
+
+A bot has no desktop, so sharing a screen shares a page of its own: a live
+clock, moving bars and fine text, in that bot's colour. It is deliberately
+detailed — the thin lines and small text are the first things to go when a
+video codec is starved, so a squeezed share is obvious on the receiving end.
+
+The call has to permit it. In Aloqa that is **Meeting settings › Screen share ›
+Allowed**; while it is blocked the button renders disabled and the bot reports
+`blocked` rather than pretending to share.
 
 Terminal equivalent:
 

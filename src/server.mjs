@@ -205,6 +205,12 @@ const runAction = async (slug, action) => {
       case 'unmute':
         results[guest.label] = await guest.setMic(true)
         break
+      case 'share-on':
+        results[guest.label] = await guest.setScreen(true)
+        break
+      case 'share-off':
+        results[guest.label] = await guest.setScreen(false)
+        break
       case 'cam-on':
         results[guest.label] = await guest.setCam(true)
         break

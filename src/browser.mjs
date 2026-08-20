@@ -58,6 +58,11 @@ export const launchChannel = () => resolveChannel('auto')
 // The marker arg lets `clean` find leftover processes after a hard kill.
 export const RUN_MARKER = '--call-bots-run'
 
+// A bot has no desktop to share, so it shares a page of its own instead. Chrome
+// will not show a source picker to an automated browser — it either hangs
+// forever or needs to be told what to pick — so the pick is made by tab title.
+export const SCREEN_TITLE = 'Call Bots shared screen'
+
 const buildArgs = (guest, media, options) => {
   // No --use-fake-ui-for-media-stream: permissions come from grantPermissions,
   // and that flag overrides the fake capture files.
@@ -68,6 +73,7 @@ const buildArgs = (guest, media, options) => {
     '--mute-audio',
     `${RUN_MARKER}=${options.runId}`,
   ]
+  args.push(`--auto-select-desktop-capture-source=${SCREEN_TITLE}`)
   if (media && !options.noVideo) args.push(`--use-file-for-fake-video-capture=${media.video}`)
   if (media && !options.noAudio) args.push(`--use-file-for-fake-audio-capture=${media.audio}`)
   return args

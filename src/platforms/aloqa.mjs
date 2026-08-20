@@ -12,6 +12,8 @@ const JOIN_TIMEOUT = 60_000
 // app believing it failed.
 const ADMISSION_TIMEOUT = 600_000
 const TOGGLE_TIMEOUT = 8_000
+// Picking a capture source and publishing it takes longer than a mute toggle.
+const SHARE_TIMEOUT = 15_000
 
 export const SEL = {
   // guest entry (/join/<token>) — anonymous, no account.
@@ -32,6 +34,11 @@ export const SEL = {
   camPair: '[data-testid="cam-control-pair"]',
   micRequest: '[data-testid="call-controls-mic-request"]',
   camRequest: '[data-testid="call-controls-camera-request"]',
+
+  // screen share: a plain toggle, and unlike the device pairs above,
+  // aria-pressed="true" here means it IS sharing. A call that forbids
+  // sharing renders the button disabled.
+  screenShare: '[data-testid="call-controls-screen-share"]',
 
   // participant grid
   tile: '[data-testid="participant-tile"]',
@@ -159,6 +166,43 @@ const setDevice = async ({ page, log }, kind, pairSelector, requestSelector, on)
   return deviceState(page, pairSelector, requestSelector)
 }
 
+const screenState = async (page) => {
+  const button = page.locator(SEL.screenShare)
+  if (!(await button.isVisible().catch(() => false))) return 'unknown'
+  if (await button.isDisabled().catch(() => false)) return 'blocked'
+  const pressed = await button.getAttribute('aria-pressed')
+  if (pressed === 'true') return 'on'
+  if (pressed === 'false') return 'off'
+  return 'unknown'
+}
+
+const setScreen = async (ctx, on) => {
+  const { page, log } = ctx
+  const current = await screenState(page)
+  if (current === 'blocked') {
+    log.warn('this call does not allow screen sharing — Meeting settings, Screen share')
+    return 'blocked'
+  }
+  if (current === 'unknown') {
+    log.warn('screen share control not found — not in call?')
+    return 'unknown'
+  }
+  const want = on ? 'on' : 'off'
+  if (current === want) return want
+  if (on) await ctx.prepareScreen()
+  await page.locator(SEL.screenShare).click()
+  try {
+    await page.waitForFunction(
+      (arg) => document.querySelector(arg.sel)?.getAttribute('aria-pressed') === arg.value,
+      { sel: SEL.screenShare, value: on ? 'true' : 'false' },
+      { timeout: SHARE_TIMEOUT },
+    )
+  } catch {
+    log.warn('screen share did not reach "' + want + '" in time')
+  }
+  return screenState(page)
+}
+
 export default {
   id: 'aloqa',
   label: 'Aloqa',
@@ -170,6 +214,8 @@ export default {
   camState: (page) => deviceState(page, SEL.camPair, SEL.camRequest),
   setMic: (ctx, on) => setDevice(ctx, 'mic', SEL.micPair, SEL.micRequest, on),
   setCam: (ctx, on) => setDevice(ctx, 'camera', SEL.camPair, SEL.camRequest, on),
+  screenState,
+  setScreen,
 
   // Buttons are not proof: check that remote <video> elements really play.
   remote: (page) =>

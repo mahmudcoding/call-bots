@@ -235,6 +235,8 @@
       <button class="btn" data-all="mute">Mute</button>
       <button class="btn" data-all="cam-on">Cameras on</button>
       <button class="btn" data-all="cam-off">Cameras off</button>
+      <button class="btn" data-all="share-on">Share screens</button>
+      <button class="btn" data-all="share-off">Stop sharing</button>
     </div>
 
     <div class="empty" id="empty">
@@ -259,6 +261,7 @@ const I = {
   micOff: svg('<line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/>'),
   cam: svg('<path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2" ry="2"/>'),
   camOff: svg('<path d="M10.66 6H14a2 2 0 0 1 2 2v2.5l5.248-3.062A.5.5 0 0 1 22 7.87v8.196"/><path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"/><path d="m2 2 20 20"/>'),
+  share: svg('<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>'),
   leave: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>'),
 }
 
@@ -370,6 +373,7 @@ const buildCard = (guest) => {
       <div class="controls">
         <button class="ibtn" data-act="mic" title="Toggle microphone">${I.mic}</button>
         <button class="ibtn" data-act="cam" title="Toggle camera">${I.cam}</button>
+        <button class="ibtn" data-act="share" title="Share a screen">${I.share}</button>
         <span class="gap"></span>
         <button class="ibtn" data-act="leave" title="Remove this bot">${I.leave}</button>
       </div>
@@ -387,11 +391,13 @@ const cardAction = async (slug, act, btn) => {
   let action = act
   if (act === 'mic') action = guest.mic === 'off' ? 'unmute' : 'mute'
   if (act === 'cam') action = guest.cam === 'off' ? 'cam-on' : 'cam-off'
+  if (act === 'share') action = guest.screen === 'on' ? 'share-off' : 'share-on'
   btn.classList.add('busy')
   try {
     const { results } = await post('/api/action', { slug, action })
     const result = results[guest.label]
     if (result === 'request') toast(`${guest.label}: the host restricted this device`, '-warn')
+    if (result === 'blocked') toast('This call does not allow screen sharing — turn it on in Meeting settings', '-warn')
   } catch (error) {
     toast(`${guest.label}: ${error.message}`, '-err')
   } finally {
@@ -428,6 +434,11 @@ const updateCard = (guest) => {
   cam.innerHTML = guest.cam === 'off' ? I.camOff : I.cam
   cam.className = `ibtn${guest.cam === 'off' ? ' -off' : ''}${guest.cam === 'request' ? ' -req' : ''}${cam.classList.contains('busy') ? ' busy' : ''}`
   cam.disabled = !inCall
+
+  const share = $('[data-act=share]', card)
+  share.className = `ibtn${guest.screen === 'on' ? ' -live' : ''}${guest.screen === 'blocked' ? ' -off' : ''}${share.classList.contains('busy') ? ' busy' : ''}`
+  share.title = guest.screen === 'blocked' ? 'Screen sharing is off for this call' : 'Share a screen'
+  share.disabled = !inCall || guest.screen === 'blocked'
 
   $('[data-act=leave]', card).disabled = ['created', 'closed'].includes(guest.state)
 }

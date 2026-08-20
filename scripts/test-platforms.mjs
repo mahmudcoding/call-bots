@@ -38,6 +38,7 @@ const ALOQA_CALL = `<!doctype html><meta charset=utf-8><body>
   <div data-testid="guest-call-surface">
     <div data-testid="mic-control-pair"><button aria-pressed="true">mic</button></div>
     <div data-testid="cam-control-pair"><button aria-pressed="true">cam</button></div>
+    <button data-testid="call-controls-screen-share" aria-pressed="false">share</button>
     <button data-testid="call-controls-leave">leave</button>
     <div id="confirm" hidden><button data-testid="call-leave-confirm-submit">yes</button></div>
     <div data-testid="participant-tile" data-local="true">
@@ -51,6 +52,9 @@ const ALOQA_CALL = `<!doctype html><meta charset=utf-8><body>
       b.addEventListener('click', () =>
         b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'))
     }
+    const sh = document.querySelector('[data-testid="call-controls-screen-share"]')
+    sh.addEventListener('click', () =>
+      sh.setAttribute('aria-pressed', sh.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'))
     document.querySelector('[data-testid="call-controls-leave"]')
       .addEventListener('click', () => { document.getElementById('confirm').hidden = false })
     ${PLAYING_VIDEO}
@@ -70,7 +74,9 @@ const drive = async (browser, { title, link, adapter, routes, expectCallId }) =>
   })
   const page = await context.newPage()
   const target = resolveLink(link)
-  const ctx = { page, target, displayName: 'Bot 1', log, fail, options: {} }
+  let screenPrepared = false
+  const ctx = { page, target, displayName: 'Bot 1', log, fail, options: {},
+    prepareScreen: async () => { screenPrepared = true } }
 
   try {
     const { callId } = await adapter.join(ctx)
@@ -83,6 +89,19 @@ const drive = async (browser, { title, link, adapter, routes, expectCallId }) =>
     check('setCam(true) turns it on', (await adapter.setCam(ctx, true)) === 'on')
     check('setMic(false) turns it off', (await adapter.setMic(ctx, false)) === 'off')
     check('setMic(true) again is idempotent', (await adapter.setMic(ctx, true)) === 'on')
+
+    if (adapter.screenState) {
+      check('screen share reads off before sharing', (await adapter.screenState(page)) === 'off')
+      check('setScreen(true) starts sharing', (await adapter.setScreen(ctx, true)) === 'on')
+      check('a page to share is opened first', screenPrepared)
+      check('setScreen(false) stops sharing', (await adapter.setScreen(ctx, false)) === 'off')
+      await page.evaluate(() =>
+        document.querySelector('[data-testid="call-controls-screen-share"]').disabled = true)
+      check('a call that forbids sharing reports blocked',
+        (await adapter.setScreen(ctx, true)) === 'blocked')
+      await page.evaluate(() =>
+        document.querySelector('[data-testid="call-controls-screen-share"]').disabled = false)
+    }
 
     await page.waitForTimeout(700) // let the fixture video reach readyState 2
     const remote = await adapter.remote(page)

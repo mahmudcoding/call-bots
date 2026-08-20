@@ -1,6 +1,8 @@
 import { launchGuest } from './browser.mjs'
+import { guestColorHex } from './fixtures.mjs'
 import { failureShot, mkLogger } from './log.mjs'
 import { platformById } from './platforms/index.mjs'
+import { screenHtml } from './screen.mjs'
 
 // One anonymous participant: a real browser that opens the call link, types a
 // name, and publishes fake-device audio and video. No account, nothing to
@@ -20,6 +22,7 @@ export class Guest {
     this.page = null
     this.lastError = null
     this.platform = null
+    this.screenPage = null
   }
 
   get label() {
@@ -56,6 +59,7 @@ export class Guest {
       log: this.log,
       fail: this.#fail,
       options: this.options,
+      prepareScreen: () => this.#prepareScreen(),
     }
   }
 
@@ -131,6 +135,29 @@ export class Guest {
 
   setCam(on) {
     return this.platform ? this.platform.setCam(this.#ctx(), on) : Promise.resolve('unknown')
+  }
+
+  // A bot has no desktop, so it shares a page of its own: opened before the
+  // share button is pressed, titled so Chrome's capture-source flag picks it,
+  // and animated so anyone watching can see the feed is live.
+  async #prepareScreen() {
+    if (this.screenPage && !this.screenPage.isClosed()) return this.screenPage
+    const page = await this.context.newPage()
+    await page.setContent(screenHtml(this.label, guestColorHex(this.user.n - 1)))
+    await this.page.bringToFront()
+    this.screenPage = page
+    return page
+  }
+
+  screenState() {
+    return this.platform?.screenState
+      ? this.platform.screenState(this.page)
+      : Promise.resolve('unknown')
+  }
+
+  setScreen(on) {
+    if (!this.platform?.setScreen) return Promise.resolve('unknown')
+    return this.platform.setScreen(this.#ctx(), on)
   }
 
   // Buttons are not proof: check that remote <video> elements really play.
