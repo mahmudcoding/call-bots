@@ -1,6 +1,6 @@
 {
   "name": "call-bots",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "description": "Put any number of guests into an Aloqa call — real WebRTC audio and video from synthetic capture devices",
