@@ -4,6 +4,7 @@ import { launchGuest } from './browser.mjs'
 import { guestColorHex } from './fixtures.mjs'
 import { failureShot, mkLogger } from './log.mjs'
 import { platformById } from './platforms/index.mjs'
+import { installMonitor, rtcSnapshot, rtcSummary } from './rtc.mjs'
 import { screenHtml, screenVideoPath } from './screen.mjs'
 
 // One anonymous participant: a real browser that opens the call link, types a
@@ -25,6 +26,8 @@ export class Guest {
     this.lastError = null
     this.platform = null
     this.screenPage = null
+    this.monitorInstall = null // in-flight stream-monitor install, so retries dedupe
+    this.monitorWarned = false // warn once per breakage, not every status tick
   }
 
   get label() {
@@ -90,7 +93,34 @@ export class Guest {
       }
       await this.#settleDevices()
     }
+    // After the devices settle, so the injection never competes with the
+    // arming clicks. Losing the monitor is not losing the bot.
+    await this.#ensureMonitor().catch(() => {})
     this.log.info('in call')
+  }
+
+  // Installs the vendored stream monitor into the call page. Deduped: the
+  // status poll retries through here whenever the page lost it (a navigation,
+  // a late admission), and two concurrent installs would re-run the monitor's
+  // IIFE, which toggles its panel instead of installing.
+  #ensureMonitor() {
+    if (this.monitorInstall) return this.monitorInstall
+    this.monitorInstall = installMonitor(this.page)
+      .then((hidden) => {
+        this.monitorWarned = false
+        return hidden
+      })
+      .catch((error) => {
+        if (!this.monitorWarned) {
+          this.monitorWarned = true
+          this.log.warn(`stream monitor install failed: ${error.message}`)
+        }
+        throw error
+      })
+      .finally(() => {
+        this.monitorInstall = null
+      })
+    return this.monitorInstall
   }
 
   // Aloqa can switch a guest's microphone on by itself as the connection
@@ -188,6 +218,23 @@ export class Guest {
   async verifyRemote() {
     if (!this.platform) return null
     return this.platform.remote(this.page)
+  }
+
+  // Small per-tick network summary for the dashboard's state snapshot. null
+  // means nothing to show — and when the cause is a page that lost its monitor
+  // (navigated, or admitted after a timeout), a reinstall is kicked off so the
+  // next tick heals on its own.
+  async rtcSummary() {
+    if (this.state !== 'in-call' || !this.page) return null
+    const summary = await rtcSummary(this.page).catch(() => null)
+    if (summary === null) this.#ensureMonitor().catch(() => {})
+    return summary
+  }
+
+  // Full sanitized stream model for the expanded card panel.
+  async rtcSnapshot() {
+    if (this.state !== 'in-call' || !this.page) return null
+    return rtcSnapshot(this.page).catch(() => null)
   }
 
   // A bot that gave up waiting and was admitted afterwards is in the call, so

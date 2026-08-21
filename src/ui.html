@@ -143,7 +143,8 @@
   .empty b { color: var(--text); font-size: 15px; font-weight: 650; }
 
   /* ---------- bot cards ---------- */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 16px; }
+  /* align-items: start — an expanded stream monitor must not stretch its row */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 16px; align-items: start; }
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
     overflow: hidden; position: relative; transition: border-color .18s, transform .18s;
@@ -186,6 +187,54 @@
   .controls .gap { flex: 1; }
   .err { margin-top: 10px; color: var(--danger); font-size: 12px; display: none; }
   .card.has-error .err { display: block; }
+
+  /* ---------- per-bot stream monitor ---------- */
+  .rtcbar {
+    display: flex; align-items: center; gap: 10px; margin-top: 10px;
+    font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .rtcbar b { color: var(--text); font-weight: 600; }
+  .qdot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+  .qdot.-ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .qdot.-warn { background: var(--warn); }
+  .qdot.-danger { background: var(--danger); }
+  .rtcpanel { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .card.rtc-open .rtcpanel { display: block; }
+  .rhero { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+  .rhero .rtt { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .rhero .qw { font-size: 12px; font-weight: 650; color: var(--muted); }
+  .rhero .qw.-ok { color: var(--ok); }
+  .rhero .qw.-warn { color: var(--warn); }
+  .rhero .qw.-danger { color: var(--danger); }
+  .rhero .path {
+    margin-left: auto; font-size: 10.5px; color: var(--faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .rstats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+  .rstat { background: var(--card-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; min-width: 0; }
+  .rstat .k { font-size: 9.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--faint); }
+  .rstat .v {
+    font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .rspark { height: 46px; margin-bottom: 8px; background: var(--card-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; }
+  .rspark svg { width: 100%; height: 100%; display: block; }
+  .rspark .rmsg { padding: 0; line-height: 38px; text-align: center; }
+  .rtcpanel .lbl { margin: 10px 0 6px; }
+  .srow {
+    display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 4px; padding: 5px 8px;
+    border-radius: 8px; background: var(--card-2); border: 1px solid var(--line);
+    font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .srow svg { width: 13px; height: 13px; flex: none; }
+  .srow .nm { flex: none; max-width: 40%; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .meta { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .meta b { color: var(--text); font-weight: 600; }
+  .srow .lvl { width: 30px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.08); overflow: hidden; flex: none; }
+  .srow .lvl i { display: block; height: 100%; background: var(--ok); }
+  .srow .rate { flex: none; color: var(--text); font-weight: 600; }
+  .rwarn { color: var(--warn); font-size: 11px; margin-top: 6px; }
+  .rmsg { color: var(--faint); font-size: 12px; padding: 6px 0; }
 
   /* ---------- toasts ---------- */
   #toasts { position: fixed; top: 70px; right: 18px; z-index: 40; display: flex; flex-direction: column; gap: 8px; }
@@ -278,6 +327,7 @@ const I = {
   camOff: svg('<path d="M10.66 6H14a2 2 0 0 1 2 2v2.5l5.248-3.062A.5.5 0 0 1 22 7.87v8.196"/><path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"/><path d="m2 2 20 20"/>'),
   share: svg('<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>'),
   leave: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>'),
+  pulse: svg('<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>'),
 }
 
 const $ = (sel, root = document) => root.querySelector(sel)
@@ -300,7 +350,7 @@ const post = async (url, body) => {
   return data
 }
 
-const S = { state: null, cards: new Map(), groups: new Map(), errorShown: null, camOn: true, micOn: true }
+const S = { state: null, cards: new Map(), groups: new Map(), rtc: new Map(), errorShown: null, camOn: true, micOn: true }
 
 /* ---------- saved label ---------- */
 const LABEL_STORAGE_KEY = 'call-bots-label'
@@ -440,14 +490,24 @@ const buildCard = (guest) => {
         <button class="ibtn" data-act="mic" title="Toggle microphone">${I.mic}</button>
         <button class="ibtn" data-act="cam" title="Toggle camera">${I.cam}</button>
         <button class="ibtn" data-act="share" title="Share a screen">${I.share}</button>
+        <button class="ibtn" data-rtc-toggle title="Stream monitor">${I.pulse}</button>
         <span class="gap"></span>
         <button class="ibtn" data-act="leave" title="Remove this bot">${I.leave}</button>
       </div>
+      <div class="rtcbar" hidden>
+        <span class="qdot"></span>
+        <span>↓ <b data-rtc="down">–</b></span>
+        <span>↑ <b data-rtc="up">–</b></span>
+        <span>RTT <b data-rtc="rtt">–</b></span>
+      </div>
+      <div class="rtcpanel" data-rtc-panel></div>
       <div class="err"></div>
     </div>`
   for (const btn of card.querySelectorAll('[data-act]')) {
     btn.onclick = () => cardAction(guest.slug, btn.dataset.act, btn)
   }
+  // Not a data-act: the monitor toggle is purely client-side, no server action.
+  $('[data-rtc-toggle]', card).onclick = () => toggleRtc(guest.slug, card)
   return card
 }
 
@@ -509,6 +569,221 @@ const updateCard = (guest, grid) => {
   share.disabled = !inCall || guest.screen === 'blocked'
 
   $('[data-act=leave]', card).disabled = ['created', 'closed'].includes(guest.state)
+
+  updateRtcCard(guest, card)
+}
+
+/* ---------- per-bot stream monitor ---------- */
+// The heavy lifting happens inside each bot's page (the injected monitor keeps
+// a model of every stream it sends and receives). The card shows its 2s SSE
+// summary at all times; opening the panel additionally polls /api/rtc/<slug>
+// for the full per-stream model while it stays open.
+const RTC_HIST_MAX = 60 // 60 × 2s summaries ≈ two minutes of throughput
+
+const rtcEntry = (slug) => {
+  let entry = S.rtc.get(slug)
+  if (!entry) {
+    entry = { open: false, timer: null, hist: [], snap: null, inFlight: false }
+    S.rtc.set(slug, entry)
+  }
+  return entry
+}
+
+// Thresholds copied from rtc-stream-monitor's quality(), so a bot reads the
+// same here as it would in the overlay itself.
+const rtcQuality = (s) => {
+  if (!s || !s.pcs) return { word: 'no connection', tone: '' }
+  if (s.via || s.rtt == null) return { word: 'connected', tone: 'ok' }
+  const loss = s.loss ?? 0
+  const jit = s.jit ?? 0
+  if (s.rtt < 100 && loss < 0.5 && jit < 20) return { word: 'excellent', tone: 'ok' }
+  if (s.rtt < 200 && loss < 2 && jit < 40) return { word: 'good', tone: 'ok' }
+  if (s.rtt < 350 && loss < 5) return { word: 'fair', tone: 'warn' }
+  return { word: 'poor', tone: 'danger' }
+}
+
+const fmtKbps = (k) => {
+  if (k == null || !isFinite(k)) return '–'
+  if (k >= 1000) return `${(k / 1000).toFixed(k >= 10000 ? 0 : 1)} Mbps`
+  return `${Math.round(k)} kbps`
+}
+const rtcMs = (v, d = 0) => (v == null || !isFinite(v) ? '–' : `${v.toFixed(d)} ms`)
+const rtcPct = (v) => (v == null || !isFinite(v) ? '–' : `${v > 0 && v < 0.05 ? '<0.1' : v.toFixed(1)}%`)
+
+const updateRtcCard = (guest, card) => {
+  const inCall = guest.state === 'in-call'
+  const entry = rtcEntry(guest.slug)
+  const rtc = guest.rtc ?? null
+  // Record throughput on every snapshot, panel open or not, so the chart has
+  // history the moment it is opened.
+  if (rtc) {
+    entry.hist.push({ t: Date.now(), down: rtc.down ?? 0, up: rtc.up ?? 0 })
+    if (entry.hist.length > RTC_HIST_MAX) entry.hist.shift()
+  }
+  $('.rtcbar', card).hidden = !inCall
+  $('[data-rtc=down]', card).textContent = fmtKbps(rtc?.down)
+  $('[data-rtc=up]', card).textContent = fmtKbps(rtc?.up)
+  $('[data-rtc=rtt]', card).textContent = rtc?.rtt == null ? '–' : `${Math.round(rtc.rtt)} ms`
+  const q = rtcQuality(rtc)
+  $('.qdot', card).className = `qdot${q.tone ? ` -${q.tone}` : ''}`
+  const btn = $('[data-rtc-toggle]', card)
+  // An open panel must stay closable after the bot drops out of the call.
+  btn.disabled = !inCall && !entry.open
+  btn.classList.toggle('-live', entry.open)
+  if (entry.open) renderRtcPanel(guest, card)
+}
+
+const pollRtc = async (slug) => {
+  const entry = S.rtc.get(slug)
+  if (!entry || !entry.open || entry.inFlight) return
+  entry.inFlight = true
+  try {
+    const res = await fetch(`/api/rtc/${encodeURIComponent(slug)}`)
+    entry.snap = res.status === 200 ? await res.json() : null
+  } catch {
+    entry.snap = null
+  }
+  entry.inFlight = false
+  const card = S.cards.get(slug)
+  const guest = (S.state?.session?.guests ?? []).find((g) => g.slug === slug)
+  if (entry.open && card && guest) renderRtcPanel(guest, card)
+}
+
+const toggleRtc = (slug, card) => {
+  const entry = rtcEntry(slug)
+  entry.open = !entry.open
+  card.classList.toggle('rtc-open', entry.open)
+  $('[data-rtc-toggle]', card).classList.toggle('-live', entry.open)
+  if (entry.open) {
+    pollRtc(slug)
+    entry.timer = setInterval(() => pollRtc(slug), 2000)
+    const guest = (S.state?.session?.guests ?? []).find((g) => g.slug === slug)
+    if (guest) renderRtcPanel(guest, card)
+  } else {
+    clearInterval(entry.timer)
+    entry.timer = null
+    entry.snap = null
+    $('[data-rtc-panel]', card).innerHTML = ''
+  }
+}
+
+const sparkSvg = (hist) => {
+  if (hist.length < 2) return '<div class="rmsg">gathering throughput…</div>'
+  const W = 280
+  const H = 38
+  const max = Math.max(1, ...hist.map((p) => Math.max(p.down, p.up)))
+  const pts = (key) =>
+    hist
+      .map((p, i) => `${((i / (hist.length - 1)) * W).toFixed(1)},${(H - 2 - (p[key] / max) * (H - 6)).toFixed(1)}`)
+      .join(' ')
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">` +
+    `<polyline points="${pts('down')}" fill="none" stroke="var(--accent-2)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` +
+    `<polyline points="${pts('up')}" fill="none" stroke="var(--ok)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` +
+    `</svg>`
+}
+
+const rstat = (k, v) => `<div class="rstat"><div class="k">${k}</div><div class="v">${v}</div></div>`
+
+const streamRow = (s) => {
+  const icon = s.kind === 'audio' ? I.mic : s.role === 'screen' ? I.share : I.cam
+  // No name found in the bot's page: last 4 of the SSRC keeps rows tellable
+  // apart instead of all reading "Video" (same fallback as the overlay).
+  const name = s.name ?? `${s.kind === 'audio' ? 'Audio' : 'Video'}${s.ssrc ? ` · ${String(s.ssrc).slice(-4)}` : ''}`
+  const meta = []
+  if (s.codec?.name) meta.push(`<b>${esc(String(s.codec.name).toUpperCase())}</b>`)
+  if (s.kind === 'video') {
+    if (s.w && s.h) meta.push(`<b>${s.w}×${s.h}</b>`)
+    if (s.fps != null && isFinite(s.fps)) meta.push(`<b>${Math.round(s.fps)}</b> fps`)
+  } else if (s.codec?.clock) {
+    meta.push(`<b>${s.codec.clock / 1000}</b> kHz`)
+  }
+  // One line per row and the middle truncates first — quality numbers live in
+  // the aggregate tiles above. Rows keep only the outbound layer annotations
+  // and the encoder-limitation flag.
+  if (s.dir === 'out') {
+    if (s.rid) meta.push(`layer <b>${esc(s.rid)}</b>`)
+    else if (s.layer) meta.push(`layer <b>${s.layer}</b>`)
+    if (s.idle) meta.push('idle')
+    if (s.limit) meta.push(`⚠ ${esc(s.limit)}-limited`)
+  }
+  const level =
+    s.kind === 'audio' && s.level != null
+      ? `<span class="lvl"><i style="width:${Math.min(100, Math.round(Math.sqrt(Math.max(0, s.level)) * 100))}%"></i></span>`
+      : ''
+  const metaHtml = meta.join(' · ')
+  // The row is one line and the middle truncates; the title carries what the
+  // ellipsis swallowed.
+  const metaText = metaHtml.replace(/<[^>]+>/gu, '')
+  return `<div class="srow">${icon}<span class="nm" title="${esc(name)}">${esc(name)}</span>` +
+    `<span class="meta" title="${metaText}">${metaHtml}</span>${level}<span class="rate">${fmtKbps(s.kbps)}</span></div>`
+}
+
+const renderRtcPanel = (guest, card) => {
+  const panel = $('[data-rtc-panel]', card)
+  if (guest.state !== 'in-call') {
+    panel.innerHTML = '<div class="rmsg">waiting for the call…</div>'
+    return
+  }
+  const entry = rtcEntry(guest.slug)
+  const d = entry.snap
+  // The hero rides the 2s summary so it ticks between panel polls; the
+  // snapshot fills in only if a summary has not arrived yet.
+  const sum = guest.rtc ??
+    (d ? { pcs: d.pcs, via: d.via, down: d.down, up: d.up, rtt: d.rtt, loss: d.loss, jit: d.jitter } : null)
+  if (!sum && !d) {
+    panel.innerHTML = '<div class="rmsg">stream monitor is warming up…</div>'
+    return
+  }
+  const q = rtcQuality(sum)
+  let path = ''
+  if (d?.localCand) {
+    path =
+      d.localCand.type === 'relay' || d.remoteCand?.type === 'relay'
+        ? `turn relay · ${d.localCand.relay ?? d.localCand.proto ?? ''}`
+        : `${d.localCand.proto ?? ''} · ${d.localCand.type ?? '?'} → ${d.remoteCand?.type ?? '?'}`
+  }
+  let html =
+    `<div class="rhero"><span class="rtt">${sum?.rtt == null ? '–' : `${Math.round(sum.rtt)} ms`}</span>` +
+    `<span class="qw${q.tone ? ` -${q.tone}` : ''}">${esc(q.word)}</span>` +
+    (path ? `<span class="path">${esc(path)}</span>` : '') +
+    '</div>' +
+    '<div class="rstats">' +
+    rstat('Receive', fmtKbps(sum?.down)) +
+    rstat('Send', fmtKbps(sum?.up)) +
+    rstat('Loss', rtcPct(sum?.loss)) +
+    rstat('Jitter', rtcMs(sum?.jit)) +
+    '</div>' +
+    `<div class="rspark">${sparkSvg(entry.hist)}</div>`
+  if (!d) {
+    html += '<div class="rmsg">loading streams…</div>'
+  } else {
+    // Simulcast without rids: streams sharing a track are encodings of one
+    // source — number them, and say the quiet ones are idle, not broken.
+    for (const s of d.outbound) {
+      if (s.kind !== 'video' || !s.track) continue
+      const sibs = d.outbound.filter((o) => o.kind === 'video' && o.track === s.track)
+      if (sibs.length > 1) {
+        if (!s.rid) s.layer = `${sibs.indexOf(s) + 1}/${sibs.length}`
+        if (!s.kbps) s.idle = true
+      }
+    }
+    html += `<div class="lbl">Sending · ${d.outbound.length}</div>` +
+      (d.outbound.map(streamRow).join('') || '<div class="rmsg">no outgoing streams</div>')
+    // A subscription carrying nothing — a muted mic, a paused SFU layer — is
+    // noise in a receiving list. 0 kbps is measured-inactive and hidden; null
+    // is merely not-measured-yet (first tick) and stays.
+    const receiving = d.inbound.filter((s) => s.kbps !== 0)
+    html += `<div class="lbl">Receiving · ${receiving.length}</div>` +
+      (receiving.map(streamRow).join('') || '<div class="rmsg">no incoming streams</div>')
+    if (d.limit) {
+      html += `<div class="rwarn">${
+        d.limit === 'cpu'
+          ? 'CPU-limited encoder — the machine cannot keep up with the configured quality'
+          : 'bandwidth-limited encoder — the network cannot carry the configured quality'
+      }</div>`
+    }
+  }
+  panel.innerHTML = html
 }
 
 /* ---------- thumbnails ---------- */
@@ -605,6 +880,11 @@ const render = (state) => {
     if (!guests.some((guest) => guest.slug === slug)) {
       card.remove()
       S.cards.delete(slug)
+      // The card takes its stream-monitor state with it — a poll timer must
+      // not outlive the bot it polls for.
+      const entry = S.rtc.get(slug)
+      if (entry?.timer) clearInterval(entry.timer)
+      S.rtc.delete(slug)
     }
   }
 }

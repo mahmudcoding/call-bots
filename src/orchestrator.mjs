@@ -253,13 +253,14 @@ export class Roster {
         // recorded, and its controls have to come back to life.
         await bounded(guest.recoverIfAdmitted(), null)
         const inCall = guest.state === 'in-call'
-        const [mic, cam, screen] = inCall
+        const [mic, cam, screen, rtc] = inCall
           ? await Promise.all([
               bounded(guest.micState(), 'unknown'),
               bounded(guest.camState(), 'unknown'),
               bounded(guest.screenState(), 'unknown'),
+              bounded(guest.rtcSummary(), null),
             ])
-          : [null, null, null]
+          : [null, null, null, null]
         return {
           index: i,
           slug: guest.user.slug,
@@ -270,6 +271,7 @@ export class Roster {
           mic,
           cam,
           screen,
+          rtc,
           lastError: guest.lastError,
         }
       }),

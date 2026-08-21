@@ -14,6 +14,7 @@ import { resolveLink } from './platforms/index.mjs'
 const UI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'ui.html')
 
 const THUMB_TTL_MS = 1500
+const RTC_TTL_MS = 1200
 const SNAPSHOT_MS = 2000
 const VERIFY_EVERY = 3 // every Nth snapshot includes the deep check
 
@@ -28,6 +29,7 @@ const session = {
 
 const sseClients = new Set()
 const thumbCache = new Map() // slug -> {at, buffer, inFlight}
+const rtcCache = new Map() // slug -> {at, data, inFlight}
 
 const broadcast = (message) => {
   const payload = `data: ${JSON.stringify(message)}\n\n`
@@ -164,6 +166,7 @@ const startSession = async (body) => {
   session.lastError = null
   session.verify = null
   thumbCache.clear()
+  rtcCache.clear()
 
   ;(async () => {
     // Stop can arrive while the batch is still joining. From that moment
@@ -302,6 +305,32 @@ const thumbnail = async (slug) => {
   return inFlight
 }
 
+// Full stream model for one bot's expanded monitor panel. Same guard, TTL
+// cache and in-flight dedupe as thumbnail(): several dashboards polling the
+// same bot cost one page read per TTL window.
+const rtcData = async (slug) => {
+  const guest = session.roster?.bySlug(slug)
+  if (!guest?.page || guest.state !== 'in-call') return null
+  const cached = rtcCache.get(slug)
+  const now = Date.now()
+  if (cached?.data && now - cached.at < RTC_TTL_MS) return cached.data
+  if (cached?.inFlight) return cached.inFlight
+  const inFlight = Promise.race([
+    guest.rtcSnapshot(),
+    new Promise((resolve) => setTimeout(() => resolve(null), 4500)),
+  ])
+    .then((data) => {
+      rtcCache.set(slug, { at: Date.now(), data, inFlight: null })
+      return data
+    })
+    .catch(() => {
+      rtcCache.set(slug, { at: Date.now(), data: null, inFlight: null })
+      return null
+    })
+  rtcCache.set(slug, { at: cached?.at ?? 0, data: cached?.data ?? null, inFlight })
+  return inFlight
+}
+
 export const startServer = async ({ port = 4610, open = true }) => {
   let snapshots = 0
 
@@ -338,6 +367,17 @@ export const startServer = async ({ port = 4610, open = true }) => {
         }
         response.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' })
         response.end(buffer)
+        return
+      }
+      if (request.method === 'GET' && url.pathname.startsWith('/api/rtc/')) {
+        const data = await rtcData(decodeURIComponent(url.pathname.split('/').pop()))
+        if (!data) {
+          response.writeHead(204)
+          response.end()
+          return
+        }
+        response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        response.end(JSON.stringify(data))
         return
       }
       if (request.method === 'POST' && url.pathname === '/api/start') {

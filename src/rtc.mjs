@@ -1,0 +1,178 @@
+import { readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// The vendored RTC Stream Monitor (see src/vendor/) runs inside each bot's
+// call page and does all the WebRTC work itself: it discovers every
+// RTCPeerConnection, polls getStats() on its own 1s loop, and keeps a
+// JSON-clone-safe snapshot at window.__rtcStreamMonitor__.model. This module
+// only installs it and reads that snapshot out — the evaluates below never
+// touch getStats, so polling them adds no WebRTC load to the page.
+const VENDOR_PATH = join(dirname(fileURLToPath(import.meta.url)), 'vendor/rtc-stream-monitor.js')
+
+// Read once per process, cached as a promise so concurrent installs during a
+// batch join share one read.
+let monitorSource = null
+const monitorSrc = () => (monitorSource ??= readFile(VENDOR_PATH, 'utf8'))
+
+// Inject the monitor into a call page and hide its overlay. Late injection is
+// the monitor's own tested path: its prototype hooks register pre-existing
+// peer connections the moment the app next calls getStats() on them (LiveKit
+// polls constantly), with a deep scan as backup. Re-running the IIFE would
+// TOGGLE the panel instead of installing, so the guard comes first.
+export const installMonitor = async (page) => {
+  const present = await page.evaluate(() => Boolean(window.__rtcStreamMonitor__))
+  if (!present) await page.evaluate(await monitorSrc())
+  // Two distinct effects, both idempotent: the `min` class makes the monitor's
+  // loop skip rendering entirely (collection continues), and hiding the host
+  // keeps the overlay out of /api/thumb screenshots. classList.add rather than
+  // clicking #bmin — the button toggles, so a repeat could un-minimise.
+  return page.evaluate(() => {
+    const host = document.getElementById('rtc-stream-monitor-host')
+    if (!host || !host.shadowRoot) return false
+    host.shadowRoot.getElementById('panel')?.classList.add('min')
+    host.style.display = 'none'
+    return true
+  })
+}
+
+// The per-tick summary that rides the dashboard's 2s state snapshot. null only
+// when the monitor is absent — the caller treats that as the reinstall signal.
+function pageSummary() {
+  const api = window.__rtcStreamMonitor__
+  if (!api) return null
+  const m = api.model
+  if (!m) return { pcs: 0 }
+  const r1 = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v * 10) / 10 : null)
+  // Distinct tracks, not streams: simulcast encodes one camera track several
+  // times, and three layers must not read as three cameras.
+  const distinct = (list, kind) => {
+    const keys = new Set()
+    for (const s of list) if (s.kind === kind) keys.add(s.track || s.id)
+    return keys.size
+  }
+  return {
+    pcs: m.pcs,
+    via: Boolean(m.viaTransport),
+    down: r1(m.down),
+    up: r1(m.up),
+    rtt: r1(m.rtt),
+    loss: r1(m.loss),
+    jit: r1(m.jitter),
+    in: { a: distinct(m.inbound, 'audio'), v: distinct(m.inbound, 'video') },
+    out: { a: distinct(m.outbound, 'audio'), v: distinct(m.outbound, 'video') },
+    limit: m.limit ?? null,
+  }
+}
+
+// The full model for one bot's expanded panel, sanitized in-page: built by
+// allowlist so the heavy per-stream `raw` stats dictionaries can never leak
+// into the wire format by omission. Participant names exist only on
+// m.elements[].name — the stream→name join here mirrors the monitor's own
+// updateCard(): match the element rendering the same track, and for outgoing
+// streams that cannot be track-matched, a single distinct named local element
+// is unambiguously this bot (same kind first, then any).
+function pageSnapshot() {
+  const api = window.__rtcStreamMonitor__
+  if (!api || !api.model) return null
+  const m = api.model
+  const els = m.elements || []
+
+  const linkedFor = (s) => {
+    let linked = s.track ? els.find((e) => e.elTrack === s.track) : null
+    if (!linked && s.dir === 'out') {
+      const single = (list) => {
+        const byName = new Map()
+        for (const e of list) if (e.local && e.name) byName.set(e.name, e)
+        return byName.size === 1 ? [...byName.values()][0] : null
+      }
+      linked = single(els.filter((e) => e.kind === (s.kind || 'video'))) ?? single(els)
+    }
+    return linked ?? null
+  }
+
+  const stream = (s) => {
+    const linked = linkedFor(s)
+    const base = {
+      id: s.id,
+      kind: s.kind ?? null,
+      dir: s.dir,
+      ssrc: s.ssrc ?? null,
+      mid: s.mid ?? null,
+      track: s.track ?? null,
+      name: linked?.name ?? null,
+      kbps: s.kbps ?? null,
+      w: s.w ?? null,
+      h: s.h ?? null,
+      fps: s.fps ?? null,
+      codec: s.codec
+        ? { name: s.codec.name ?? null, clock: s.codec.clock ?? null, channels: s.codec.channels ?? null }
+        : null,
+      // The single sanctioned read of `raw`: cumulative wire bytes, which the
+      // assembled model drops in favour of rates.
+      bytes: s.raw ? (s.dir === 'in' ? s.raw.bytesReceived : s.raw.bytesSent) ?? null : null,
+    }
+    if (s.dir === 'in') {
+      return Object.assign(base, {
+        jitter: s.jitter ?? null,
+        lossPct: s.lossPct ?? null,
+        jbDelay: s.jbDelay ?? null,
+        framesDropped: s.framesDropped ?? null,
+        freezeCount: s.freezeCount ?? null,
+        nack: s.nack ?? null,
+        pli: s.pli ?? null,
+        decoder: s.decoder ?? null,
+        level: (s.track ? m.levels?.[s.track] : null) ?? s.audioLevel ?? null,
+      })
+    }
+    return Object.assign(base, {
+      rid: s.rid ?? null,
+      limit: s.limit ?? null,
+      active: s.active ?? null,
+      rtt: s.rtt ?? null,
+      fraction: s.fraction ?? null,
+      remoteJitter: s.remoteJitter ?? null,
+      nack: s.nack ?? null,
+      pli: s.pli ?? null,
+      keyframes: s.keyframes ?? null,
+      encoder: s.encoder ?? null,
+      // A screen-capture track's label is a capture source, not a device name.
+      role:
+        s.kind === 'video'
+          ? /web-contents|screen|window|tab/iu.test(linked?.label ?? '')
+            ? 'screen'
+            : 'camera'
+          : null,
+      level: s.kind === 'audio' ? m.localAudio ?? null : null,
+    })
+  }
+
+  return {
+    t: m.t,
+    pcs: m.pcs,
+    via: Boolean(m.viaTransport),
+    down: m.down ?? null,
+    up: m.up ?? null,
+    rtt: m.rtt ?? null,
+    loss: m.loss ?? null,
+    jitter: m.jitter ?? null,
+    avail: m.avail ?? null,
+    limit: m.limit ?? null,
+    dtls: m.dtls ?? null,
+    localCand: m.localCand
+      ? { type: m.localCand.type ?? null, proto: m.localCand.proto ?? null, net: m.localCand.net ?? null, relay: m.localCand.relay ?? null }
+      : null,
+    remoteCand: m.remoteCand ? { type: m.remoteCand.type ?? null, proto: m.remoteCand.proto ?? null } : null,
+    outbound: (m.outbound || []).map(stream),
+    inbound: (m.inbound || []).map(stream),
+    dataChannels: (m.dataChannels || []).map((d) => ({
+      label: d.label ?? null,
+      state: d.state ?? null,
+      inKbps: d.inKbps ?? null,
+      outKbps: d.outKbps ?? null,
+    })),
+  }
+}
+
+export const rtcSummary = (page) => page.evaluate(pageSummary)
+export const rtcSnapshot = (page) => page.evaluate(pageSnapshot)

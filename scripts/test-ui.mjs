@@ -72,9 +72,48 @@ const roster = (states, sizes = [states.length]) => {
       mic: guestState === 'in-call' ? 'on' : null,
       cam: guestState === 'in-call' ? 'on' : null,
       screen: guestState === 'in-call' ? 'off' : null,
+      rtc: guestState === 'in-call'
+        ? { pcs: 1, via: false, down: 1830, up: 940, rtt: 45, loss: 0.2, jit: 9, in: { a: 1, v: 2 }, out: { a: 1, v: 1 }, limit: null }
+        : null,
       lastError: null,
     })),
   }
+}
+
+// What /api/rtc/<slug> serves: the sanitized stream model read out of a bot's
+// page, one row per RTP stream, names joined in-page. `limit` on the video
+// exercises the encoder-limitation warning.
+const RTC_SNAP = {
+  t: 1_755_000_000_000, pcs: 1, via: false, down: 1830, up: 940, rtt: 45, loss: 0.2, jitter: 9,
+  avail: 2500, limit: 'bandwidth', dtls: 'connected',
+  localCand: { type: 'host', proto: 'udp', net: 'wifi', relay: null },
+  remoteCand: { type: 'srflx', proto: 'udp' },
+  outbound: [
+    { id: 'o1', kind: 'video', dir: 'out', ssrc: 111111, mid: '0', track: 't-local-v', name: 'Bot 1',
+      kbps: 900, w: 1280, h: 720, fps: 24, codec: { name: 'VP8', clock: 90000, channels: null },
+      bytes: 1_000_000, rid: null, limit: 'bandwidth', active: true, rtt: 45, fraction: 0.1,
+      remoteJitter: 8, nack: 0, pli: 1, keyframes: 4, encoder: 'libvpx', role: 'camera', level: null },
+    { id: 'o2', kind: 'audio', dir: 'out', ssrc: 222222, mid: '1', track: 't-local-a', name: 'Bot 1',
+      kbps: 40, w: null, h: null, fps: null, codec: { name: 'opus', clock: 48000, channels: 2 },
+      bytes: 200_000, rid: null, limit: null, active: true, rtt: 45, fraction: 0,
+      remoteJitter: 6, nack: 0, pli: 0, keyframes: null, encoder: null, role: null, level: 0.4 },
+  ],
+  inbound: [
+    { id: 'i1', kind: 'video', dir: 'in', ssrc: 333333, mid: '2', track: 't-rem-v', name: 'Alice',
+      kbps: 850, w: 1280, h: 720, fps: 24, codec: { name: 'VP8', clock: 90000, channels: null },
+      bytes: 3_000_000, jitter: 7, lossPct: 0.2, jbDelay: 40, framesDropped: 2, freezeCount: 0,
+      nack: 1, pli: 0, decoder: 'libvpx', level: null },
+    { id: 'i2', kind: 'audio', dir: 'in', ssrc: 444444, mid: '3', track: 't-rem-a', name: 'Alice',
+      kbps: 38, w: null, h: null, fps: null, codec: { name: 'opus', clock: 48000, channels: 2 },
+      bytes: 400_000, jitter: 5, lossPct: 0, jbDelay: 35, framesDropped: null, freezeCount: null,
+      nack: 0, pli: 0, decoder: null, level: 0.6 },
+    // measured-inactive (0 kbps): a paused SFU layer — the panel must hide it
+    { id: 'i3', kind: 'video', dir: 'in', ssrc: 555555, mid: '4', track: null, name: null,
+      kbps: 0, w: 960, h: 540, fps: 0, codec: { name: 'VP9', clock: 90000, channels: null },
+      bytes: 12_000, jitter: null, lossPct: null, jbDelay: null, framesDropped: null, freezeCount: null,
+      nack: 0, pli: 0, decoder: null, level: null },
+  ],
+  dataChannels: [{ label: 'lossy', state: 'open', inKbps: 1, outKbps: 1 }],
 }
 
 // The same browser choice the app makes, so this passes on an installation
@@ -117,6 +156,13 @@ try {
         status: 200,
         contentType: 'application/json',
         body: '{"ok":true,"results":{}}',
+      })
+    }
+    if (request.method() === 'GET' && path.startsWith('/api/rtc/')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(RTC_SNAP),
       })
     }
     if (path === '/') {
@@ -172,6 +218,10 @@ try {
   check('all-bots actions wait for running', !(await page.locator('#allbar').isVisible()))
   check('removing a batch waits for running too',
     await page.locator('[data-batch-remove]').first().isDisabled())
+  check('no stream stats before a bot is in the call',
+    !(await page.locator('.card[data-slug="bot-2"] .rtcbar').isVisible()))
+  check('the stream monitor waits for the call too',
+    await page.locator('.card[data-slug="bot-2"] [data-rtc-toggle]').isDisabled())
 
   if (stopVisibleMidJoin) {
     const stopRequest = page.waitForRequest((request) => request.url().endsWith('/api/stop'))
@@ -201,6 +251,35 @@ try {
   await page.waitForFunction(() => !document.querySelector('#goBtn').disabled)
   check('the bots are shown as the one batch they arrived in',
     (await page.locator('.batch').count()) === 1)
+
+  console.log('\nstream monitor')
+  check('an in-call card shows its compact stats bar',
+    await page.locator('.card[data-slug="bot-1"] .rtcbar').isVisible())
+  check('the bar shows the receive rate from the snapshot',
+    (await page.locator('.card[data-slug="bot-1"] [data-rtc=down]').textContent()) === '1.8 Mbps')
+  const monitorBtn = page.locator('.card[data-slug="bot-1"] [data-rtc-toggle]')
+  await monitorBtn.click()
+  check('opening the monitor expands the card', await page
+    .locator('.card[data-slug="bot-1"]')
+    .evaluate((card) => card.classList.contains('rtc-open')))
+  await page.waitForFunction(
+    () => document.querySelectorAll('.card[data-slug="bot-1"] .srow').length === 4,
+  )
+  check('one row per stream, sending and receiving', true)
+  check('a 0 kbps receiving stream is hidden and the count matches',
+    (await page.locator('.card[data-slug="bot-1"] .rtcpanel').textContent()).includes('Receiving · 2'))
+  check('streams carry the names joined inside the bot page',
+    (await page.locator('.card[data-slug="bot-1"] .rtcpanel').textContent()).includes('Alice'))
+  check('45 ms / 0.2% / 9 ms reads as excellent',
+    (await page.locator('.card[data-slug="bot-1"] .rhero .qw').textContent()) === 'excellent')
+  check('the encoder limitation is surfaced',
+    await page.locator('.card[data-slug="bot-1"] .rwarn').isVisible())
+  await monitorBtn.click()
+  check('closing the monitor collapses the card', !(await page
+    .locator('.card[data-slug="bot-1"]')
+    .evaluate((card) => card.classList.contains('rtc-open'))))
+  check('closing it stops the polling',
+    await page.evaluate(() => ![...S.rtc.values()].some((entry) => entry.timer)))
 
   console.log('\nrunning — 3 more bots sent into the same call')
   await push(state('running', roster(['in-call', 'in-call', 'in-call', 'in-call', 'in-call'], [2, 3])))
@@ -241,6 +320,8 @@ try {
   check('the cards are cleared', (await page.locator('.card').count()) === 0)
   check('the groups are cleared too', (await page.locator('.batch').count()) === 0)
   check('the empty state returns', await page.locator('#empty').isVisible())
+  check('stream monitor state goes with the cards',
+    await page.evaluate(() => S.rtc.size === 0))
 
   console.log('\nreopen')
   await page.close()
