@@ -64,8 +64,8 @@ replace the camera clips. Sources and licences are in
   for anyone already in the call.
 - **Send codecs.** `--audio-codec`, `--video-codec` and `--screen-codec` choose
   what a bot *sends* (`opus`; `vp8`/`vp9`/`h264`/`av1`/`h265`).
-  In the dashboard the same three dropdowns sit on each bot's stream monitor
-  and in the all-bots bar — switchable at any moment, mid-call included. A
+  In the dashboard, camera and screenshare dropdowns sit on each bot's stream
+  monitor and in the all-bots bar (audio is opus-only, so it has no picker) — switchable at any moment, mid-call included. A
   bot's own dropdowns list only what its call actually negotiates, so every
   choice offered is one that can land. A codec only ever changes through a
   negotiation the call takes part in — anything else would black the bot out

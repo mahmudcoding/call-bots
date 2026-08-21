@@ -77,7 +77,7 @@ const roster = (states, sizes = [states.length]) => {
       mic: guestState === 'in-call' ? 'on' : null,
       cam: guestState === 'in-call' ? 'on' : null,
       screen: guestState === 'in-call' ? 'off' : null,
-      codecs: { audio: null, video: guestState === 'in-call' ? 'vp9' : null, screen: null },
+      codecs: { audio: null, video: null, screen: guestState === 'in-call' ? 'vp8' : null },
       rtc: guestState === 'in-call'
         ? { pcs: 1, via: false, down: 1830, up: 940, rtt: 45, loss: 0.2, jit: 9, in: { a: 1, v: 2 }, out: { a: 1, v: 1 }, limit: null }
         : null,
@@ -312,7 +312,9 @@ try {
   const codecBar = page.locator('.card[data-slug="bot-1"] [data-codec-bar]')
   const menu = page.locator('.cmenu')
   check('the codec bar appears with the snapshot', await codecBar.isVisible())
-  check('one picker per role', (await codecBar.locator('[data-codec-role]').count()) === 3)
+  check('one picker per role, and none for the opus-only microphone',
+    (await codecBar.locator('[data-codec-role]').count()) === 2 &&
+      (await codecBar.locator('[data-codec-role="audio"]').count()) === 0)
   await codecBar.locator('[data-codec-role="video"]').click()
   const videoRows = await menu.locator('.crow').evaluateAll(
     (rows) => rows.map((row) => row.textContent.replace('✓', '').trim()),
@@ -339,16 +341,14 @@ try {
   await page.keyboard.press('Escape')
   check('Escape closes the menu', (await menu.count()) === 0)
   check('with nothing forced the picker reads the codec in use',
-    (await codecBar.locator('[data-codec-role="audio"]').textContent()) === 'OPUS' &&
-      !(await codecBar.locator('[data-codec-role="audio"]').evaluate((node) => node.classList.contains('-forced'))))
+    (await codecBar.locator('[data-codec-role="video"]').textContent()) === 'VP8' &&
+      !(await codecBar.locator('[data-codec-role="video"]').evaluate((node) => node.classList.contains('-forced'))))
   check('a forced codec wears the accent mark',
-    (await codecBar.locator('[data-codec-role="video"]').textContent()) === 'VP9' &&
-      (await codecBar.locator('[data-codec-role="video"]').evaluate((node) => node.classList.contains('-forced'))))
-  check('no live sender and nothing forced still reads Auto',
-    (await codecBar.locator('[data-codec-role="screen"]').textContent()) === 'Auto')
-  await codecBar.locator('[data-codec-role="audio"]').click()
+    (await codecBar.locator('[data-codec-role="screen"]').textContent()) === 'VP8' &&
+      (await codecBar.locator('[data-codec-role="screen"]').evaluate((node) => node.classList.contains('-forced'))))
+  await codecBar.locator('[data-codec-role="video"]').click()
   check('the menu ticks the codec in effect',
-    (await menu.locator('.crow.-on').textContent()).replace('✓', '').trim() === 'OPUS')
+    (await menu.locator('.crow.-on').textContent()).replace('✓', '').trim() === 'VP8')
   await page.keyboard.press('Escape')
   await codecBar.locator('[data-codec-role="screen"]').click()
   check('a role with no live sender still offers everything the browser can send',
@@ -357,20 +357,24 @@ try {
     const sent = page.waitForRequest(
       (request) => request.method() === 'POST' && request.url().endsWith('/api/action'),
     )
-    await menu.locator('.crow', { hasText: 'VP8' }).first().click()
+    await menu.locator('.crow', { hasText: 'VP9' }).first().click()
     return (await sent).postDataJSON()
   })()
   check('picking a codec posts the action for that one bot',
     codecAction.slug === 'bot-1' && codecAction.action === 'codec' &&
-      codecAction.value?.role === 'screen' && codecAction.value?.codec === 'vp8',
+      codecAction.value?.role === 'screen' && codecAction.value?.codec === 'vp9',
     JSON.stringify(codecAction))
-  check('the picker shows the codec the server holds for the bot',
-    (await codecBar.locator('[data-codec-role="video"]').textContent()) === 'VP9')
+  await page.waitForFunction(
+    () => !document.querySelector('[data-codec-role="screen"]')?.dataset.busy,
+  )
+  await push(state('running', roster(['in-call', 'in-call'])))
+  check('the picker returns to the codec the server holds for the bot',
+    (await codecBar.locator('[data-codec-role="screen"]').textContent()) === 'VP8')
   const captions = await codecBar.locator('[data-codec-live]').evaluateAll(
     (nodes) => nodes.map((node) => node.textContent),
   )
   check('captions are plain role names — the codec lives in the button',
-    captions[0] === 'Mic' && captions[1] === 'Cam' && captions[2] === 'Screen',
+    captions.length === 2 && captions[0] === 'Cam' && captions[1] === 'Screen',
     JSON.stringify(captions))
   await monitorBtn.click()
   check('closing the monitor collapses the card', !(await page
@@ -434,7 +438,7 @@ try {
     await page.evaluate(() => S.rtc.size === 0))
   check('the fleet codec pickers forget the old session too',
     (await page.locator('[data-all-codec="video"]').textContent()) === 'Auto' &&
-      (await page.locator('[data-all-codec="audio"]').textContent()) === 'OPUS')
+      (await page.locator('[data-all-codec="audio"]').count()) === 0)
 
   console.log('\nreopen')
   await page.close()

@@ -337,8 +337,6 @@
       <button class="btn" data-all="cam-off">Cameras off</button>
       <button class="btn" data-all="share-on">Share screens</button>
       <button class="btn" data-all="share-off">Stop sharing</button>
-      <span class="ck">Mic</span>
-      <button type="button" class="codec" data-all-codec="audio" title="Every bot's microphone send codec">Auto</button>
       <span class="ck">Cam</span>
       <button type="button" class="codec" data-all-codec="video" title="Every bot's camera send codec">Auto</button>
       <span class="ck">Screen</span>
@@ -894,8 +892,9 @@ const streamRow = (s) => {
     `<span class="meta" title="${metaText}">${metaHtml}</span>${level}<span class="rate">${fmtKbps(s.kbps)}</span></div>`
 }
 
+// No microphone picker: the platform publishes opus and nothing else, and a
+// one-option dropdown is furniture. The audio role still exists API-side.
 const CODEC_ROLES = [
-  { role: 'audio', word: 'Mic', kind: 'audio' },
   { role: 'video', word: 'Cam', kind: 'video' },
   { role: 'screen', word: 'Screen', kind: 'video' },
 ]
