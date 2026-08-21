@@ -8,3 +8,4 @@ provision.env
 *.log
 .DS_Store
 .server/
+.claude/
