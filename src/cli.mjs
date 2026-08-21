@@ -27,6 +27,9 @@ options:
   --mic <on|off>     arrive with the microphone on or off (default on)
   --no-video         attach no camera video at all (cheaper for a load run)
   --no-audio         attach no microphone audio at all
+  --audio-codec <c>  prefer a microphone send codec (opus)
+  --video-codec <c>  prefer a camera send codec (vp8, vp9, h264, av1, h265)
+  --screen-codec <c> prefer a screenshare send codec (vp8, vp9, h264, av1, h265)
   --size <WxH>       camera video size (default 1920x1080, even dimensions)
   --fps <n>          camera video frame rate (default 12)
   --regen            rebuild the media even if it is cached
@@ -48,6 +51,9 @@ const parseCli = () => {
       mic: { type: 'string', default: 'on' },
       'no-video': { type: 'boolean', default: false },
       'no-audio': { type: 'boolean', default: false },
+      'audio-codec': { type: 'string' },
+      'video-codec': { type: 'string' },
+      'screen-codec': { type: 'string' },
       size: { type: 'string', default: '1920x1080' },
       fps: { type: 'string', default: '12' },
       regen: { type: 'boolean', default: false },
@@ -68,6 +74,10 @@ const buildOptions = (values, baseUrl) => ({
   // The state a bot arrives in; its clip and voice stay attached either way.
   startCam: values.camera !== 'off',
   startMic: values.mic !== 'off',
+  // Lowercased here; the in-page shim decides whether the browser can send it.
+  audioCodec: values['audio-codec']?.toLowerCase() ?? null,
+  videoCodec: values['video-codec']?.toLowerCase() ?? null,
+  screenCodec: values['screen-codec']?.toLowerCase() ?? null,
   size: values.size,
   fps: Number(values.fps) || 12,
   regen: values.regen,

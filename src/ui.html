@@ -65,6 +65,8 @@
     font-size: 12.5px; color: var(--muted); white-space: nowrap;
   }
   .chip b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .chip.-warn b { color: var(--warn); }
+  .chip.-danger b { color: var(--danger); }
 
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -122,6 +124,44 @@
   .tgl:disabled { opacity: .6; }
   .bar .go { height: 42px; padding: 0 22px; font-size: 14px; }
 
+  /* Codec pickers: a button trigger and an app-drawn menu, because the
+     browser's native select popup places and sizes itself however the OS
+     pleases. The menu is position:fixed so the card's overflow cannot clip it. */
+  .codec {
+    height: 30px; padding: 0 22px 0 9px; border-radius: var(--r-sm);
+    background: var(--card-2) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M1 1l3 3 3-3' stroke='%238b93a3' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 8px center;
+    border: 1px solid var(--line-2); color: var(--text);
+    font: inherit; font-size: 11.5px; font-weight: 600; text-align: left;
+    appearance: none; -webkit-appearance: none; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .codec:hover { border-color: rgba(255,255,255,.22); }
+  .codec:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .codec.-open { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  /* A forced codec wears the accent: the picker shows the codec in effect
+     either way, so the border is what says "pinned by hand, not the call's
+     own choice". */
+  .codec.-forced { border-color: var(--accent); }
+  .codec:disabled { opacity: .5; pointer-events: none; }
+  .cmenu {
+    position: fixed; z-index: 60; padding: 4px; min-width: 96px;
+    max-height: 60vh; overflow-y: auto;
+    background: var(--card-2); border: 1px solid var(--line-2); border-radius: var(--r-sm);
+    box-shadow: 0 14px 36px -10px rgba(0,0,0,.65);
+    display: flex; flex-direction: column; gap: 1px;
+    animation: menuin .12s ease;
+  }
+  @keyframes menuin { from { opacity: 0; transform: translateY(-3px); } }
+  .crow {
+    display: flex; align-items: center; gap: 7px; padding: 5px 12px 5px 7px;
+    border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--text);
+    text-align: left; white-space: nowrap;
+  }
+  .crow:hover { background: var(--accent-soft); }
+  .crow.-on { color: var(--accent-2); }
+  .crow .tick { width: 12px; flex: none; font-size: 10px; }
+
   .allbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
   .allbar .lead { font-size: 12px; font-weight: 650; color: var(--faint); text-transform: uppercase; letter-spacing: .4px; }
   .allbar .btn { height: 30px; padding: 0 11px; font-size: 12.5px; }
@@ -149,7 +189,7 @@
     background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
     overflow: hidden; position: relative; transition: border-color .18s, transform .18s;
   }
-  .card:hover { border-color: var(--line-2); transform: translateY(-2px); }
+  .card:hover, .card.menu-open { border-color: var(--line-2); transform: translateY(-2px); }
   .card .strip { height: 3px; }
   .thumb { position: relative; aspect-ratio: 16/9; background: #0d1016; overflow: hidden; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -200,26 +240,19 @@
   .qdot.-danger { background: var(--danger); }
   .rtcpanel { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
   .card.rtc-open .rtcpanel { display: block; }
-  .rhero { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
-  .rhero .rtt { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .rhero .qw { font-size: 12px; font-weight: 650; color: var(--muted); }
-  .rhero .qw.-ok { color: var(--ok); }
-  .rhero .qw.-warn { color: var(--warn); }
-  .rhero .qw.-danger { color: var(--danger); }
-  .rhero .path {
-    margin-left: auto; font-size: 10.5px; color: var(--faint);
+  .codecbar { display: flex; gap: 6px; margin-bottom: 8px; }
+  .codecbar .cgrp { flex: 1; min-width: 0; }
+  .codecbar .codec { width: 100%; }
+  /* The role and the codec REALLY going out live in a tiny caption above the
+     select, so the dropdown rows can be nothing but clean codec names. */
+  .ck {
+    display: block; margin-bottom: 3px;
+    font-size: 9.5px; font-weight: 700; letter-spacing: .6px;
+    text-transform: uppercase; color: var(--faint);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .rstats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
-  .rstat { background: var(--card-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; min-width: 0; }
-  .rstat .k { font-size: 9.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--faint); }
-  .rstat .v {
-    font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .rspark { height: 46px; margin-bottom: 8px; background: var(--card-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; }
-  .rspark svg { width: 100%; height: 100%; display: block; }
-  .rspark .rmsg { padding: 0; line-height: 38px; text-align: center; }
+  .allbar .ck { display: inline; margin: 0 0 0 6px; }
+  .allbar .codec { min-width: 104px; }
   .rtcpanel .lbl { margin: 10px 0 6px; }
   .srow {
     display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 4px; padding: 5px 8px;
@@ -263,6 +296,9 @@
   <div class="brand"><div class="dot"></div>Call Bots</div>
   <span id="statusPill" class="pill">idle</span>
   <div class="spacer"></div>
+  <span id="sysNet" class="chip" hidden title="This computer's network throughput">↓ <b>–</b> ↑ <b>–</b></span>
+  <span id="sysCpu" class="chip" hidden title="This computer's CPU load">CPU <b>–</b></span>
+  <span id="sysMem" class="chip" hidden title="This computer's memory">RAM <b>–</b></span>
   <button id="stopBtn" class="btn -danger" hidden>Stop</button>
 </header>
 
@@ -301,6 +337,12 @@
       <button class="btn" data-all="cam-off">Cameras off</button>
       <button class="btn" data-all="share-on">Share screens</button>
       <button class="btn" data-all="share-off">Stop sharing</button>
+      <span class="ck">Mic</span>
+      <button type="button" class="codec" data-all-codec="audio" title="Every bot's microphone send codec">Auto</button>
+      <span class="ck">Cam</span>
+      <button type="button" class="codec" data-all-codec="video" title="Every bot's camera send codec">Auto</button>
+      <span class="ck">Screen</span>
+      <button type="button" class="codec" data-all-codec="screen" title="Every bot's screenshare send codec">Auto</button>
     </div>
 
     <div class="empty" id="empty">
@@ -432,6 +474,129 @@ for (const btn of document.querySelectorAll('[data-all]')) {
   }
 }
 
+/* ---------- send codecs ---------- */
+const CODEC_WORD = { audio: 'microphone', video: 'camera', screen: 'screenshare' }
+// The fixed order every picker lists codecs in.
+const CODEC_RANK = { vp9: 0, vp8: 1, av1: 2, h265: 3, h264: 4, opus: 0, g722: 1, pcmu: 2, pcma: 3 }
+const sortCodecs = (names) =>
+  [...names].sort((a, b) => (CODEC_RANK[a] ?? 99) - (CODEC_RANK[b] ?? 99) || a.localeCompare(b))
+// What the fleet-wide pickers offer; a bot's own picker narrows further to
+// what its call negotiates.
+const CODEC_LISTS = {
+  audio: sortCodecs(['opus']),
+  video: sortCodecs(['vp8', 'vp9', 'h264', 'av1', 'h265']),
+  screen: sortCodecs(['vp8', 'vp9', 'h264', 'av1', 'h265']),
+}
+
+// One app-drawn menu at a time, position:fixed and flipped when the space
+// below runs out — the native select popup goes wherever the OS pleases,
+// which is exactly the discomfort this replaces.
+const codecMenu = { host: null, anchor: null, card: null }
+const closeCodecMenu = () => {
+  codecMenu.host?.remove()
+  codecMenu.anchor?.classList.remove('-open')
+  codecMenu.card?.classList.remove('menu-open')
+  codecMenu.host = null
+  codecMenu.anchor = null
+  codecMenu.card = null
+}
+const placeCodecMenu = () => {
+  if (!codecMenu.host || !codecMenu.anchor) return
+  const at = codecMenu.anchor.getBoundingClientRect()
+  // The anchor scrolled out of sight — a floating menu with no visible owner
+  // is worse than no menu.
+  if (at.bottom < 0 || at.top > window.innerHeight) return closeCodecMenu()
+  const menu = codecMenu.host
+  menu.style.minWidth = `${at.width}px`
+  const size = { width: menu.offsetWidth, height: menu.offsetHeight }
+  const below = window.innerHeight - at.bottom
+  const top = below >= size.height + 8 || below >= at.top ? at.bottom + 4 : at.top - size.height - 4
+  menu.style.top = `${Math.max(8, Math.min(top, window.innerHeight - size.height - 8))}px`
+  menu.style.left = `${Math.max(8, Math.min(at.left, window.innerWidth - size.width - 8))}px`
+}
+const openCodecMenu = (anchor, values, current, onPick) => {
+  if (codecMenu.anchor === anchor) return closeCodecMenu()
+  closeCodecMenu()
+  const menu = el('div', 'cmenu')
+  for (const value of values) {
+    const on = value === current
+    const row = el('button', `crow${on ? ' -on' : ''}`)
+    row.type = 'button'
+    row.innerHTML = `<span class="tick">${on ? '✓' : ''}</span>${esc(value.toUpperCase())}`
+    row.onclick = () => {
+      closeCodecMenu()
+      if (!on) onPick(value)
+    }
+    menu.append(row)
+  }
+  document.body.append(menu)
+  codecMenu.host = menu
+  codecMenu.anchor = anchor
+  // The menu floats outside the card's DOM, so the pointer crossing onto it
+  // would drop the card's hover lift and visibly bob the card. Hold the card
+  // in its lifted state for as long as its menu is open.
+  codecMenu.card = anchor.closest('.card')
+  codecMenu.card?.classList.add('menu-open')
+  anchor.classList.add('-open')
+  placeCodecMenu()
+}
+document.addEventListener('pointerdown', (event) => {
+  if (!codecMenu.host) return
+  if (codecMenu.host.contains(event.target) || codecMenu.anchor.contains(event.target)) return
+  closeCodecMenu()
+})
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeCodecMenu()
+})
+// Stay glued to the anchor while anything scrolls or the window resizes.
+window.addEventListener('scroll', placeCodecMenu, true)
+window.addEventListener('resize', placeCodecMenu)
+
+// One toast for a fleet-wide switch: the per-bot outcomes, counted.
+const codecOutcome = (results) => {
+  const counts = {}
+  for (const result of Object.values(results)) counts[result] = (counts[result] ?? 0) + 1
+  const text = ['applied', 'default', 'requested', 'unavailable', 'unsupported', 'unknown']
+    .filter((key) => counts[key])
+    .map((key) => `${counts[key]} ${key}`)
+    .join(', ')
+  const ok = Object.values(results).every((r) => r === 'applied' || r === 'default')
+  return { text: text || 'no bots', ok }
+}
+
+// A single-option picker has nothing "Auto" could mean — name the codec.
+const resetAllCodecPickers = () => {
+  for (const btn of document.querySelectorAll('[data-all-codec]')) {
+    const list = CODEC_LISTS[btn.dataset.allCodec]
+    const single = list.length === 1 ? list[0] : ''
+    btn.dataset.value = single
+    btn.textContent = single ? single.toUpperCase() : 'Auto'
+  }
+}
+resetAllCodecPickers()
+
+for (const btn of document.querySelectorAll('[data-all-codec]')) {
+  const role = btn.dataset.allCodec
+  btn.onclick = async () => {
+    openCodecMenu(btn, CODEC_LISTS[role], btn.dataset.value ?? '', async (codec) => {
+      btn.dataset.value = codec ?? ''
+      btn.textContent = codec ? codec.toUpperCase() : 'Auto'
+      btn.disabled = true
+      try {
+        const { results } = await post('/api/action', {
+          slug: 'all', action: 'codec', value: { role, codec },
+        })
+        const { text, ok } = codecOutcome(results)
+        toast(`${CODEC_WORD[role]} codec for all bots: ${text}`, ok ? '-ok' : '-warn')
+      } catch (error) {
+        toast(error.message, '-err')
+      } finally {
+        btn.disabled = false
+      }
+    })
+  }
+}
+
 /* ---------- batches: the bots of one send, shown and removed together ---------- */
 const clock = (at) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -500,7 +665,10 @@ const buildCard = (guest) => {
         <span>↑ <b data-rtc="up">–</b></span>
         <span>RTT <b data-rtc="rtt">–</b></span>
       </div>
-      <div class="rtcpanel" data-rtc-panel></div>
+      <div class="rtcpanel" data-rtc-panel>
+        <div class="codecbar" data-codec-bar hidden></div>
+        <div data-rtc-dyn></div>
+      </div>
       <div class="err"></div>
     </div>`
   for (const btn of card.querySelectorAll('[data-act]')) {
@@ -578,12 +746,10 @@ const updateCard = (guest, grid) => {
 // a model of every stream it sends and receives). The card shows its 2s SSE
 // summary at all times; opening the panel additionally polls /api/rtc/<slug>
 // for the full per-stream model while it stays open.
-const RTC_HIST_MAX = 60 // 60 × 2s summaries ≈ two minutes of throughput
-
 const rtcEntry = (slug) => {
   let entry = S.rtc.get(slug)
   if (!entry) {
-    entry = { open: false, timer: null, hist: [], snap: null, inFlight: false }
+    entry = { open: false, timer: null, snap: null, inFlight: false }
     S.rtc.set(slug, entry)
   }
   return entry
@@ -607,19 +773,42 @@ const fmtKbps = (k) => {
   if (k >= 1000) return `${(k / 1000).toFixed(k >= 10000 ? 0 : 1)} Mbps`
   return `${Math.round(k)} kbps`
 }
-const rtcMs = (v, d = 0) => (v == null || !isFinite(v) ? '–' : `${v.toFixed(d)} ms`)
-const rtcPct = (v) => (v == null || !isFinite(v) ? '–' : `${v > 0 && v < 0.05 ? '<0.1' : v.toFixed(1)}%`)
-
+// The machine's own load, in the header: how much headroom is left for more
+// bots, and whether a quality dip is the computer's fault. A chip stays
+// hidden until its number exists (older server, first warming sample).
+const chipTone = (chip, pct) => {
+  chip.classList.toggle('-danger', pct != null && pct >= 92)
+  chip.classList.toggle('-warn', pct != null && pct >= 80 && pct < 92)
+}
+const renderSystem = (system) => {
+  const cpuChip = $('#sysCpu')
+  const memChip = $('#sysMem')
+  const netChip = $('#sysNet')
+  const cpu = system?.cpu ?? null
+  cpuChip.hidden = cpu == null
+  if (cpu != null) {
+    cpuChip.querySelector('b').textContent = `${cpu < 10 ? cpu.toFixed(1) : Math.round(cpu)}%`
+    chipTone(cpuChip, cpu)
+  }
+  const mem = system?.mem ?? null
+  memChip.hidden = !(mem?.total > 0 && mem?.avail != null)
+  if (!memChip.hidden) {
+    const used = Math.max(0, mem.total - mem.avail)
+    memChip.querySelector('b').textContent = `${(used / 1024 ** 3).toFixed(1)} GB`
+    chipTone(memChip, (used / mem.total) * 100)
+  }
+  const net = system?.net ?? null
+  netChip.hidden = net == null
+  if (net != null) {
+    const [downEl, upEl] = netChip.querySelectorAll('b')
+    downEl.textContent = fmtKbps(net.down)
+    upEl.textContent = fmtKbps(net.up)
+  }
+}
 const updateRtcCard = (guest, card) => {
   const inCall = guest.state === 'in-call'
   const entry = rtcEntry(guest.slug)
   const rtc = guest.rtc ?? null
-  // Record throughput on every snapshot, panel open or not, so the chart has
-  // history the moment it is opened.
-  if (rtc) {
-    entry.hist.push({ t: Date.now(), down: rtc.down ?? 0, up: rtc.up ?? 0 })
-    if (entry.hist.length > RTC_HIST_MAX) entry.hist.shift()
-  }
   $('.rtcbar', card).hidden = !inCall
   $('[data-rtc=down]', card).textContent = fmtKbps(rtc?.down)
   $('[data-rtc=up]', card).textContent = fmtKbps(rtc?.up)
@@ -663,26 +852,13 @@ const toggleRtc = (slug, card) => {
     clearInterval(entry.timer)
     entry.timer = null
     entry.snap = null
-    $('[data-rtc-panel]', card).innerHTML = ''
+    // Only the rebuilt region: the codec bar keeps its selects (and their
+    // options) for the next open, it just goes back into hiding.
+    $('[data-rtc-dyn]', card).innerHTML = ''
+    $('[data-codec-bar]', card).hidden = true
   }
 }
 
-const sparkSvg = (hist) => {
-  if (hist.length < 2) return '<div class="rmsg">gathering throughput…</div>'
-  const W = 280
-  const H = 38
-  const max = Math.max(1, ...hist.map((p) => Math.max(p.down, p.up)))
-  const pts = (key) =>
-    hist
-      .map((p, i) => `${((i / (hist.length - 1)) * W).toFixed(1)},${(H - 2 - (p[key] / max) * (H - 6)).toFixed(1)}`)
-      .join(' ')
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">` +
-    `<polyline points="${pts('down')}" fill="none" stroke="var(--accent-2)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` +
-    `<polyline points="${pts('up')}" fill="none" stroke="var(--ok)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` +
-    `</svg>`
-}
-
-const rstat = (k, v) => `<div class="rstat"><div class="k">${k}</div><div class="v">${v}</div></div>`
 
 const streamRow = (s) => {
   const icon = s.kind === 'audio' ? I.mic : s.role === 'screen' ? I.share : I.cam
@@ -718,57 +894,154 @@ const streamRow = (s) => {
     `<span class="meta" title="${metaText}">${metaHtml}</span>${level}<span class="rate">${fmtKbps(s.kbps)}</span></div>`
 }
 
+const CODEC_ROLES = [
+  { role: 'audio', word: 'Mic', kind: 'audio' },
+  { role: 'video', word: 'Cam', kind: 'video' },
+  { role: 'screen', word: 'Screen', kind: 'video' },
+]
+
+// What each role is sending right now, read from the same snapshot the stream
+// rows are built from — so "auto" can say what auto currently means.
+const liveCodecs = (snap) => {
+  const live = { audio: null, video: null, screen: null }
+  // Carrying streams first, so a dead leftover row can never lend its codec
+  // to the picker.
+  const rows = [...(snap?.outbound ?? [])].sort((a, b) => (b.kbps ?? 0) - (a.kbps ?? 0))
+  for (const s of rows) {
+    const name = s.codec?.name
+    if (!name) continue
+    const role = s.kind === 'audio' ? 'audio' : s.role === 'screen' ? 'screen' : 'video'
+    live[role] ??= String(name).toLowerCase()
+  }
+  return live
+}
+
+// The selects live OUTSIDE the region the 2s poll rebuilds — an innerHTML
+// pass would slam a dropdown shut under the pointer. Options come from what
+// this bot's browser can send (the snapshot's caps) and are rebuilt only when
+// that changes; values follow the server state unless the user is mid-pick.
+const updateCodecBar = (guest, card, caps, live, negotiated) => {
+  const bar = $('[data-codec-bar]', card)
+  if (!caps) {
+    bar.hidden = true
+    return
+  }
+  // The choices ARE what a switch can land on: the call's negotiated set for
+  // the role, narrowed to what this browser can send. While a role has no
+  // live sender yet (a share not started) nothing is negotiated, so the
+  // browser's own list stands in. Unavailable codecs are simply not offered.
+  const options = {}
+  for (const { role, kind } of CODEC_ROLES) {
+    const avail = negotiated?.[role] ?? []
+    options[role] = sortCodecs(
+      avail.length ? (caps[kind] ?? []).filter((name) => avail.includes(name)) : caps[kind] ?? [],
+    )
+  }
+  const sig = JSON.stringify(options)
+  if (bar.dataset.caps !== sig) {
+    // Never rebuild under the pointer or under an open menu; the next poll
+    // catches up.
+    if (bar.contains(document.activeElement) || bar.contains(codecMenu.anchor)) return
+    bar.dataset.caps = sig
+    bar.innerHTML = ''
+    for (const { role, word } of CODEC_ROLES) {
+      const group = el('div', 'cgrp')
+      const caption = el('span', 'ck', esc(word))
+      caption.dataset.codecLive = role
+      const btn = el('button', 'codec', 'Auto')
+      btn.type = 'button'
+      btn.dataset.codecRole = role
+      btn.title = `${CODEC_WORD[role][0].toUpperCase()}${CODEC_WORD[role].slice(1)} send codec`
+      btn.onclick = () => {
+        // The button already reads the codec in effect; tick that row.
+        const current = btn.textContent === 'Auto' ? '' : btn.textContent.toLowerCase()
+        openCodecMenu(btn, options[role], current, (codec) =>
+          setBotCodec(guest.slug, role, codec, btn))
+      }
+      group.append(caption, btn)
+      bar.append(group)
+    }
+  }
+  bar.hidden = false
+  // The picker shows the codec in effect: the forced one when pinned, else
+  // the codec really going out — "Auto" only while nothing is known (a share
+  // not started). The accent border is what marks a pin.
+  for (const btn of bar.querySelectorAll('[data-codec-role]')) {
+    if (btn === codecMenu.anchor || btn.dataset.busy) continue
+    const role = btn.dataset.codecRole
+    const forced = guest.codecs?.[role] ?? ''
+    // With exactly one possible codec there is nothing "Auto" could mean —
+    // name it (a muted mic on Aloqa still speaks opus when it speaks).
+    const only = options[role].length === 1 ? options[role][0] : ''
+    const effective = forced || live?.[role] || only
+    btn.textContent = effective ? effective.toUpperCase() : 'Auto'
+    btn.classList.toggle('-forced', Boolean(forced))
+  }
+}
+
+const setBotCodec = async (slug, role, codec, btn) => {
+  const guest = (S.state?.session?.guests ?? []).find((g) => g.slug === slug)
+  const label = guest?.label ?? slug
+  btn.dataset.busy = '1'
+  btn.disabled = true
+  btn.textContent = codec ? codec.toUpperCase() : 'Auto'
+  btn.classList.toggle('-forced', Boolean(codec))
+  try {
+    const { results } = await post('/api/action', { slug, action: 'codec', value: { role, codec } })
+    const result = results[label] ?? Object.values(results)[0]
+    if (result === 'applied') toast(`${label}: ${CODEC_WORD[role]} codec is now ${codec}`, '-ok')
+    else if (result === 'default') toast(`${label}: ${CODEC_WORD[role]} codec back to auto — the call decides from here`, '-ok')
+    else if (result === 'unsupported') toast(`${label}: this browser cannot send ${codec}`, '-warn')
+    else if (result === 'unavailable') toast(`${label}: this call does not negotiate ${codec} — nothing to switch to`, '-warn')
+    else toast(`${label}: ${CODEC_WORD[role]} codec requested — the stream rows show what the call took`, '-warn')
+  } catch (error) {
+    toast(`${label}: ${error.message}`, '-err')
+  } finally {
+    delete btn.dataset.busy
+    btn.disabled = false
+  }
+}
+
 const renderRtcPanel = (guest, card) => {
-  const panel = $('[data-rtc-panel]', card)
+  const dyn = $('[data-rtc-dyn]', card)
   if (guest.state !== 'in-call') {
-    panel.innerHTML = '<div class="rmsg">waiting for the call…</div>'
+    $('[data-codec-bar]', card).hidden = true
+    dyn.innerHTML = '<div class="rmsg">waiting for the call…</div>'
     return
   }
   const entry = rtcEntry(guest.slug)
   const d = entry.snap
-  // The hero rides the 2s summary so it ticks between panel polls; the
-  // snapshot fills in only if a summary has not arrived yet.
-  const sum = guest.rtc ??
-    (d ? { pcs: d.pcs, via: d.via, down: d.down, up: d.up, rtt: d.rtt, loss: d.loss, jit: d.jitter } : null)
-  if (!sum && !d) {
-    panel.innerHTML = '<div class="rmsg">stream monitor is warming up…</div>'
-    return
-  }
-  const q = rtcQuality(sum)
-  let path = ''
-  if (d?.localCand) {
-    path =
-      d.localCand.type === 'relay' || d.remoteCand?.type === 'relay'
-        ? `turn relay · ${d.localCand.relay ?? d.localCand.proto ?? ''}`
-        : `${d.localCand.proto ?? ''} · ${d.localCand.type ?? '?'} → ${d.remoteCand?.type ?? '?'}`
-  }
-  let html =
-    `<div class="rhero"><span class="rtt">${sum?.rtt == null ? '–' : `${Math.round(sum.rtt)} ms`}</span>` +
-    `<span class="qw${q.tone ? ` -${q.tone}` : ''}">${esc(q.word)}</span>` +
-    (path ? `<span class="path">${esc(path)}</span>` : '') +
-    '</div>' +
-    '<div class="rstats">' +
-    rstat('Receive', fmtKbps(sum?.down)) +
-    rstat('Send', fmtKbps(sum?.up)) +
-    rstat('Loss', rtcPct(sum?.loss)) +
-    rstat('Jitter', rtcMs(sum?.jit)) +
-    '</div>' +
-    `<div class="rspark">${sparkSvg(entry.hist)}</div>`
+  updateCodecBar(guest, card, d?.caps ?? null, liveCodecs(d), d?.negotiated ?? null)
+  // The compact bar on the card already carries rates and RTT; the panel is
+  // codecs and streams only.
+  let html = ''
   if (!d) {
     html += '<div class="rmsg">loading streams…</div>'
   } else {
+    // Dead weight out, idle layers in: a 0 kbps outgoing row earns its place
+    // only as the paused sibling of a track that is otherwise alive (an
+    // SFU-paused simulcast or SVC layer). A row whose whole track carries
+    // nothing is a leftover publication — codec churn and backup publications
+    // shed those — not a stream anyone is sending.
+    const sending = d.outbound.filter((s) => {
+      if (s.kbps !== 0) return true
+      if (!s.track) return false
+      return d.outbound.some(
+        (o) => o !== s && o.kind === s.kind && o.track === s.track && (o.kbps ?? 0) > 0,
+      )
+    })
     // Simulcast without rids: streams sharing a track are encodings of one
     // source — number them, and say the quiet ones are idle, not broken.
-    for (const s of d.outbound) {
+    for (const s of sending) {
       if (s.kind !== 'video' || !s.track) continue
-      const sibs = d.outbound.filter((o) => o.kind === 'video' && o.track === s.track)
+      const sibs = sending.filter((o) => o.kind === 'video' && o.track === s.track)
       if (sibs.length > 1) {
         if (!s.rid) s.layer = `${sibs.indexOf(s) + 1}/${sibs.length}`
         if (!s.kbps) s.idle = true
       }
     }
-    html += `<div class="lbl">Sending · ${d.outbound.length}</div>` +
-      (d.outbound.map(streamRow).join('') || '<div class="rmsg">no outgoing streams</div>')
+    html += `<div class="lbl">Sending · ${sending.length}</div>` +
+      (sending.map(streamRow).join('') || '<div class="rmsg">no outgoing streams</div>')
     // A subscription carrying nothing — a muted mic, a paused SFU layer — is
     // noise in a receiving list. 0 kbps is measured-inactive and hidden; null
     // is merely not-measured-yet (first tick) and stays.
@@ -783,7 +1056,7 @@ const renderRtcPanel = (guest, card) => {
       }</div>`
     }
   }
-  panel.innerHTML = html
+  dyn.innerHTML = html
 }
 
 /* ---------- thumbnails ---------- */
@@ -816,12 +1089,17 @@ const render = (state) => {
   const pill = $('#statusPill')
   pill.textContent = state.status
   pill.className = `pill -${state.status}`
+  renderSystem(state.system)
 
   // A session mid-join is already a session to stop: one bot stuck in an
   // admission lobby holds "joining" for up to ten minutes, and hiding Stop for
   // all of it leaves the window with no way out.
   $('#stopBtn').hidden = !running && !joining
   $('#allbar').hidden = !running
+  // A fleet-wide pick belongs to the fleet it was made for: when the session
+  // is gone, the pickers go back to their defaults instead of advertising a
+  // stale choice to the next batch.
+  if (!running) resetAllCodecPickers()
   $('#goBtn').textContent = running ? 'Add bots' : 'Send bots'
   $('#goBtn').disabled = busy
   // the link belongs to the live call, so it is fixed for the session

@@ -131,7 +131,9 @@ export class Roster {
       return {
         n,
         index: n - 1,
-        label: `${label ? `${label} ` : ''}Bot ${n}`,
+        // A label replaces the word "Bot", it does not stack onto it: a batch
+        // labelled "QA" arrives as "QA 3", an unlabelled one as "Bot 3".
+        label: label ? `${label} ${n}` : `Bot ${n}`,
         slug: `bot-${n}`,
       }
     })
@@ -272,6 +274,7 @@ export class Roster {
           cam,
           screen,
           rtc,
+          codecs: guest.codecs,
           lastError: guest.lastError,
         }
       }),

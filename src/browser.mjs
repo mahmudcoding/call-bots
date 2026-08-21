@@ -1,10 +1,23 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
 
 import { runsDir } from './config.mjs'
 import { plain as log } from './log.mjs'
+
+// The codec-preference shim rides an init script into every page of a guest's
+// context: negotiation hooks have to exist before the call platform's bundle
+// creates its peer connections, which rules out the page.evaluate route the
+// stream monitor takes. Exported so the RTC test harness can inject the exact
+// same file the app does.
+export const CODEC_SHIM_PATH = join(dirname(fileURLToPath(import.meta.url)), 'codec-shim.js')
+
+// Strips the audio ask out of getDisplayMedia before Chromium sees it: a tab
+// share needs no OS capture API, but a system-audio ask makes macOS pop its
+// Screen Recording permission dialog for nothing.
+export const CAPTURE_SHIM_PATH = join(dirname(fileURLToPath(import.meta.url)), 'capture-shim.js')
 
 // System Chrome locations per platform. Playwright's channel:'chrome' finds
 // these itself — we detect only to choose between Chrome and the bundled
@@ -88,7 +101,7 @@ const buildArgs = (guest, media, options) => {
 // so distinct media needs distinct processes. Contexts are always fresh — a
 // guest must never carry a signed-in cookie, or the invite page auto-joins as
 // that account instead of asking for a name.
-export const launchGuest = async (guest, media, options) => {
+export const launchGuest = async (guest, media, options, codecs = null) => {
   const args = buildArgs(guest, media, options)
   const headless = !options.headed
   const primary = resolveChannel(options.browser)
@@ -112,6 +125,23 @@ export const launchGuest = async (guest, media, options) => {
     viewport: { width: 1920, height: 1080 },
   })
   await context.grantPermissions(['camera', 'microphone'], { origin: options.baseUrl })
+  // Two scripts, run in the order they were added: the per-guest seed, then
+  // the shim that reads it. Always installed — with no preference set the shim
+  // is inert, and a bot launched with defaults can still be switched later.
+  await context.addInitScript((prefs) => {
+    window.__botCodecInit__ = prefs
+  }, codecs ?? {})
+  await context.addInitScript({ path: CODEC_SHIM_PATH })
+  await context.addInitScript(
+    (seed) => {
+      window.__botCaptureInit__ = seed
+    },
+    {
+      label: guest.label,
+      videoUrl: `${options.baseUrl}/__call-bots-screen?asset=video`,
+    },
+  )
+  await context.addInitScript({ path: CAPTURE_SHIM_PATH })
   // A fixed budget fails a whole large batch at once: while fifty browsers are
   // starting, none of them loads a page in twenty seconds, and every bot dies
   // of a timeout that says nothing about the real problem.

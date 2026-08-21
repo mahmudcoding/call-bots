@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import { bundledChromiumPath, systemChromePath } from './browser.mjs'
 import { onLog, plain as log } from './log.mjs'
-import { machineProfile } from './machine.mjs'
+import { machineProfile, systemUsage } from './machine.mjs'
 import { Roster } from './orchestrator.mjs'
 import { resolveLink } from './platforms/index.mjs'
 
@@ -102,6 +102,7 @@ const stateSnapshot = async ({ withVerify = false } = {}) => {
       startedAt: session.startedAt,
       lastError: session.lastError,
       machine: machineProfile(),
+      system: await systemUsage(),
       browserReady: bundledChromiumPath() !== null || systemChromePath() !== null,
       browserInstalling: browserInstall !== null,
       browserProgress,
@@ -141,6 +142,17 @@ const botLabel = (value) =>
     .replace(/\s+/gu, ' ')
     .slice(0, 40)
 
+// 'vp9' shapes only. A codec name is refused rather than cleaned: a typo that
+// silently reset a preference to the default would read as the codec working.
+const codecName = (value) => {
+  if (value === undefined || value === null || value === '') return null
+  const name = String(value).trim().toLowerCase()
+  if (!/^[a-z0-9-]{2,16}$/u.test(name)) {
+    throw new Error(`not a codec name: ${String(value).slice(0, 24)}`)
+  }
+  return name
+}
+
 // Send the first bots in. The link carries the platform, the origin and the
 // call itself, so there is nothing else to configure.
 const startSession = async (body) => {
@@ -157,6 +169,9 @@ const startSession = async (body) => {
     startCam: body.camera !== false,
     startMic: body.mic !== false,
     label: botLabel(body.label),
+    audioCodec: codecName(body.audioCodec),
+    videoCodec: codecName(body.videoCodec),
+    screenCodec: codecName(body.screenCodec),
     size: '1920x1080',
     fps: 12,
   })
@@ -232,9 +247,18 @@ const batchTarget = (slug) => {
   return match ? Number(match[1]) : null
 }
 
-const runAction = async (slug, action) => {
+const runAction = async (slug, action, value) => {
   const roster = session.roster
   if (!roster || session.status !== 'running') throw new Error('no running session')
+  // Validated before the loop: half a fleet switched and then a 400 about the
+  // other half would leave no way to tell what actually happened.
+  const codecArgs =
+    action === 'codec'
+      ? { role: String(value?.role ?? ''), codec: codecName(value?.codec) }
+      : null
+  if (codecArgs && !['audio', 'video', 'screen'].includes(codecArgs.role)) {
+    throw new Error('the codec action needs a role: audio, video or screen')
+  }
   const batch = batchTarget(slug)
   // Removing a batch is one gesture, not one per bot: the roster closes them
   // together, and it owns the group while a batch still arriving is taken out.
@@ -270,6 +294,12 @@ const runAction = async (slug, action) => {
         break
       case 'cam-off':
         results[guest.label] = await guest.setCam(false)
+        break
+      case 'codec':
+        results[guest.label] = await guest.setCodec(codecArgs.role, codecArgs.codec)
+        // The panel poll must not spend a cache window showing the old codec
+        // right after the switch it reports on.
+        rtcCache.delete(guest.user.slug)
         break
       case 'leave':
         await roster.remove(guest.user.slug)
@@ -396,6 +426,9 @@ export const startServer = async ({ port = 4610, open = true }) => {
           startCam: body.camera !== false,
           startMic: body.mic !== false,
           label: botLabel(body.label),
+          audioCodec: codecName(body.audioCodec),
+          videoCodec: codecName(body.videoCodec),
+          screenCodec: codecName(body.screenCodec),
         })
         broadcast(await stateSnapshot())
         json(response, 200, { ok: true, ...result })
@@ -403,7 +436,7 @@ export const startServer = async ({ port = 4610, open = true }) => {
       }
       if (request.method === 'POST' && url.pathname === '/api/action') {
         const body = await readBody(request)
-        const results = await runAction(body.slug, body.action)
+        const results = await runAction(body.slug, body.action, body.value)
         // removing the last guest ends the session, so the link can change
         if (session.roster && session.roster.guests.length === 0) {
           await stopSession()

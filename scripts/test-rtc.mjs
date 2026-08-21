@@ -20,7 +20,7 @@
 //   node scripts/test-rtc.mjs
 import { chromium } from 'playwright'
 
-import { launchChannel } from '../src/browser.mjs'
+import { CAPTURE_SHIM_PATH, CODEC_SHIM_PATH, launchChannel } from '../src/browser.mjs'
 import { installMonitor, rtcSnapshot, rtcSummary } from '../src/rtc.mjs'
 
 const results = []
@@ -70,9 +70,21 @@ const BOT_PAGE = `<!doctype html>
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
       bus.postMessage({ kind: 'answer', to: 'peer', description: pc.localDescription.toJSON() })
+    } else if (data.kind === 'answer') {
+      await pc.setRemoteDescription(data.description)
     } else if (data.kind === 'candidate') {
       await pc.addIceCandidate(data.candidate).catch(() => {})
     }
+  }
+  // Renegotiation the way LiveKit does it: the bot answers the first offer,
+  // then owns every negotiation after that. Gated on the call being up so the
+  // negotiationneeded burst from the initial addTrack cannot glare with the
+  // peer's opening offer.
+  pc.onnegotiationneeded = async () => {
+    if (!window.__fixtureReady || pc.signalingState !== 'stable') return
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    bus.postMessage({ kind: 'offer', to: 'peer', description: pc.localDescription.toJSON() })
   }
   // LiveKit polls stats itself; that polling is what lets a late-injected
   // monitor register connections that existed before it. Reproduce it.
@@ -101,7 +113,13 @@ const PEER_PAGE = `<!doctype html>
   bus.onmessage = async ({ data }) => {
     if (data.to !== 'peer') return
     if (data.kind === 'answer') await pc.setRemoteDescription(data.description)
-    else if (data.kind === 'candidate') await pc.addIceCandidate(data.candidate).catch(() => {})
+    else if (data.kind === 'offer') {
+      // The bot renegotiates (a codec switch does); answer whatever it asks.
+      await pc.setRemoteDescription(data.description)
+      const answer = await pc.createAnswer()
+      await pc.setLocalDescription(answer)
+      bus.postMessage({ kind: 'answer', to: 'bot', description: pc.localDescription.toJSON() })
+    } else if (data.kind === 'candidate') await pc.addIceCandidate(data.candidate).catch(() => {})
   }
   const offer = await pc.createOffer()
   await pc.setLocalDescription(offer)
@@ -201,6 +219,150 @@ try {
   check('the camera stream is not mistaken for a screen share',
     snap?.outbound?.filter((s) => s.kind === 'video').every((s) => s.role === 'camera'),
     JSON.stringify(snap?.outbound?.map((s) => [s.kind, s.role])))
+  check('the browser reports what it can send, for the codec dropdowns',
+    snap?.caps?.video?.includes('vp8') && snap?.caps?.audio?.includes('opus') &&
+      !snap?.caps?.video?.includes('rtx'),
+    JSON.stringify(snap?.caps))
+
+  // A separate context proves the codec shim end to end with the SAME two-step
+  // injection browser.mjs performs: the seed, then the shim file. The first
+  // context stays shim-free on purpose — it pins the monitor against an
+  // untouched page. VP8↔VP9 only: the bundled Chromium may lack H264.
+  console.log('\ncodec control')
+  const codecContext = await browser.newContext()
+  await codecContext.grantPermissions(['camera', 'microphone'], { origin: ORIGIN })
+  await codecContext.route(`${ORIGIN}/**`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: route.request().url().includes('/peer') ? PEER_PAGE : BOT_PAGE,
+    }),
+  )
+  // In the app every page of a context belongs to the bot. Here the peer
+  // shares the context only because BroadcastChannel needs it — and it must
+  // stay neutral, or its answers would re-reorder codecs with the same
+  // preference and a mid-call switch on the bot would prove nothing.
+  await codecContext.addInitScript((prefs) => {
+    if (!location.pathname.includes('/peer')) window.__botCodecInit__ = prefs
+  }, { video: 'vp9' })
+  await codecContext.addInitScript({ path: CODEC_SHIM_PATH })
+  await codecContext.addInitScript((seed) => {
+    window.__botCaptureInit__ = seed
+  }, { label: 'Bot 1', videoUrl: null })
+  await codecContext.addInitScript({ path: CAPTURE_SHIM_PATH })
+  const botPage = await codecContext.newPage()
+  await botPage.goto(`${ORIGIN}/`)
+  await botPage.waitForFunction(() => window.__listening || window.__fixtureError)
+  const codecPeer = await codecContext.newPage()
+  await codecPeer.goto(`${ORIGIN}/peer`)
+  await botPage.waitForFunction(() => window.__fixtureReady || window.__fixtureError, null, { timeout: 20_000 })
+  const codecFixtureError = await botPage.evaluate(() => window.__fixtureError ?? null)
+  check('the call still connects with the shim installed', !codecFixtureError, codecFixtureError ?? '')
+  await installMonitor(botPage)
+
+  const sentCodecs = async (kind) => {
+    const model = await rtcSnapshot(botPage)
+    // Carrying rows only — after a renegotiation the old codec's row lingers
+    // at 0 kbps for a few seconds and must not vote.
+    const streams = (model?.outbound ?? []).filter(
+      (s) => s.kind === kind && s.codec?.name && (s.kbps ?? 0) > 0,
+    )
+    return streams.length > 0 ? streams.map((s) => s.codec.name.toLowerCase()) : null
+  }
+  const waitCodec = async (kind, name, timeout = 15_000) => {
+    const deadline = Date.now() + timeout
+    let last = null
+    while (Date.now() < deadline) {
+      last = await sentCodecs(kind)
+      if (last && last.every((codec) => codec === name)) return true
+      await botPage.waitForTimeout(500)
+    }
+    console.log(`        (last ${kind} codecs seen: ${JSON.stringify(last)})`)
+    return false
+  }
+
+  const seeded = await botPage.evaluate(() => window.__botCodecState__())
+  check('the launch seed reaches the shim', seeded?.prefs?.video === 'vp9', JSON.stringify(seeded))
+  // The bot ANSWERS the fixture's first offer, and an answerer's reorder
+  // cannot steer its own sending — the preference lands at the first
+  // negotiation the bot itself drives. Nudge one, the way any renegotiating
+  // app eventually would.
+  await botPage.evaluate(() => window.__botSetCodec__('video', 'vp9'))
+  check('a launch-time preference reaches the wire at the first bot-driven negotiation',
+    await waitCodec('video', 'vp9'))
+  check('audio is untouched by a video preference', await waitCodec('audio', 'opus'))
+
+  const refused = await botPage.evaluate(() => window.__botSetCodec__('video', 'not-a-codec'))
+  check('an unknown codec is refused, not applied',
+    refused?.ok === false && refused?.reason === 'unsupported', JSON.stringify(refused))
+  const badRole = await botPage.evaluate(() => window.__botSetCodec__('desktop', 'vp8'))
+  check('an unknown role is refused too', badRole?.ok === false && badRole?.reason === 'bad-role')
+
+  const switched = await botPage.evaluate(() => window.__botSetCodec__('video', 'vp8'))
+  check('a live switch is accepted and lands on the connection',
+    switched?.ok === true && switched?.applied >= 1 && switched?.pcs === 1, JSON.stringify(switched))
+  check('the codec flips mid-call (the offer path)', await waitCodec('video', 'vp8'))
+  check('audio still rides its own preference', await waitCodec('audio', 'opus'))
+
+  const secondSwitch = await botPage.evaluate(() => window.__botSetCodec__('video', 'vp9'))
+  check('switching back up is accepted',
+    secondSwitch?.ok === true && (await waitCodec('video', 'vp9')))
+  const reset = await botPage.evaluate(() => window.__botSetCodec__('video', null))
+  check('resetting to the platform default is accepted', reset?.ok === true, JSON.stringify(reset))
+  // The proof that the reset really lets go: the encoder pin is lifted and the
+  // renegotiated default (VP8 first in Chromium) comes back on its own.
+  check('a reset returns the wire to the browser default', await waitCodec('video', 'vp8'))
+
+  // The rest of the audio matrix the dashboard offers. RED wraps opus, so it
+  // proves itself at the top of the negotiated order — stats keep naming the
+  // opus inside it, which is exactly why the tool settles red differently.
+  for (const name of ['g722', 'pcmu', 'pcma']) {
+    const switched = await botPage.evaluate((n) => window.__botSetCodec__('audio', n), name)
+    check(`audio switches to ${name}`,
+      switched?.ok === true && (await waitCodec('audio', name)))
+  }
+  const redSwitch = await botPage.evaluate(() => window.__botSetCodec__('audio', 'red'))
+  let redTop = null
+  for (let i = 0; i < 20 && redTop !== 'red'; i += 1) {
+    await botPage.waitForTimeout(500)
+    redTop = await botPage.evaluate(() => window.__botCodecTop__('audio'))
+  }
+  check('audio red engages at the top of the negotiation',
+    redSwitch?.ok === true && redTop === 'red', `top=${redTop}`)
+  await botPage.evaluate(() => window.__botSetCodec__('audio', null))
+
+  // H265 sending is the browser's most temperamental: Chromium advertises it
+  // yet does not always elect it from SDP order alone. The guarantee under
+  // test is safety — the ask is accepted and the stream keeps carrying,
+  // landed or not; what a real call takes is the live platform's decision.
+  // The synthetic share: getDisplayMedia must resolve without ever touching
+  // the browser's capture picker (no OS permission machinery involved), hand
+  // back a live canvas stream, and tag its track for role detection.
+  const share = await botPage.evaluate(async () => {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+    const track = stream.getVideoTracks()[0]
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const result = {
+      live: track.readyState === 'live',
+      tagged: window.__botScreenTrackIds__?.has(track.id) ?? false,
+      width: track.getSettings().width ?? null,
+    }
+    track.stop()
+    return result
+  })
+  check('a share is synthesised in-page, live and tagged as a screen track',
+    share.live && share.tagged && share.width === 1920, JSON.stringify(share))
+
+  const videoCaps = (await rtcSnapshot(botPage))?.caps?.video ?? []
+  if (videoCaps.includes('h265')) {
+    const h265 = await botPage.evaluate(() => window.__botSetCodec__('video', 'h265'))
+    const landed = await waitCodec('video', 'h265', 6000)
+    check('an h265 ask is accepted and never breaks the stream',
+      h265?.ok === true && ((await sentCodecs('video'))?.length ?? 0) > 0,
+      `landed=${landed}`)
+    await botPage.evaluate(() => window.__botSetCodec__('video', null))
+  }
+  await codecContext.close()
 } finally {
   await browser.close().catch(() => {})
 }

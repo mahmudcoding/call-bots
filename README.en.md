@@ -20,14 +20,17 @@ starts in about a second. Works on macOS and Ubuntu.
 ```bash
 ./run.sh --link "<link>" --bots 3 --share 1                 # one bot shares its screen
 ./run.sh --link "<link>" --bots 10 --camera off --mic off   # arrive muted and dark
+./run.sh --link "<link>" --bots 5 --video-codec vp9         # prefer a camera send codec
 ./run.sh --ui                                               # a window instead of the terminal
 ./run.sh --check                                            # set up, send no bots
 ./run.sh --clean                                            # remove everything it installed
 ```
 
 `--ui` opens a dashboard on `http://127.0.0.1:4610` with a card per bot: mute,
-camera, screen share, remove, and the same for all of them at once. It binds to
-localhost, so on a server reach it through a tunnel:
+camera, screen share, send codecs, remove, and the same for all of them at
+once; the header shows the computer's live CPU, RAM and network throughput,
+so the headroom for more bots is always in view. It binds
+to localhost, so on a server reach it through a tunnel:
 
 ```bash
 ssh -L 4610:127.0.0.1:4610 <user>@<server>
@@ -59,6 +62,18 @@ replace the camera clips. Sources and licences are in
   they are in. It needs Meeting settings → Screen share → **Allowed**. If it
   was previously *On request*, send the bots again: Aloqa does not lift that one
   for anyone already in the call.
+- **Send codecs.** `--audio-codec`, `--video-codec` and `--screen-codec` choose
+  what a bot *sends* (`opus`; `vp8`/`vp9`/`h264`/`av1`/`h265`).
+  In the dashboard the same three dropdowns sit on each bot's stream monitor
+  and in the all-bots bar — switchable at any moment, mid-call included. A
+  bot's own dropdowns list only what its call actually negotiates, so every
+  choice offered is one that can land. A codec only ever changes through a
+  negotiation the call takes part in — anything else would black the bot out
+  for every other participant. On Aloqa the bot republishes its track the
+  LiveKit way, so a switch lands in a second or two; other platforms
+  renegotiate, and failing that the bot briefly rejoins. The stream rows show
+  what was really negotiated. H264/H265 availability depends on the browser
+  the bots run in.
 - **A Mac app**, if you would rather not use a terminal: `npm run build:app`
   builds a versioned ZIP in `dist/` (Apple Silicon). Version `0.3.0` must be
   installed manually once and opened with right-click → Open because it is

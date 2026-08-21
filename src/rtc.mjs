@@ -105,9 +105,29 @@ function pageSnapshot() {
       w: s.w ?? null,
       h: s.h ?? null,
       fps: s.fps ?? null,
-      codec: s.codec
-        ? { name: s.codec.name ?? null, clock: s.codec.clock ?? null, channels: s.codec.channels ?? null }
-        : null,
+      codec: (() => {
+        if (!s.codec) return null
+        const codec = {
+          name: s.codec.name ?? null,
+          clock: s.codec.clock ?? null,
+          channels: s.codec.channels ?? null,
+        }
+        // RED never shows its face in stats — they attribute the stream to
+        // the opus inside it. The wire testifies instead: full redundancy
+        // roughly doubles the audio payload per packet (opus sits near
+        // 60–120 bytes, RED near 180–240). Label it, so the rows and the
+        // pickers tell the truth.
+        if (
+          s.dir === 'out' &&
+          s.kind === 'audio' &&
+          /^opus$/iu.test(codec.name ?? '') &&
+          (s.raw?.packetsSent ?? 0) > 0
+        ) {
+          const payload = ((s.raw.bytesSent ?? 0) - (s.raw.headerBytesSent ?? 0)) / s.raw.packetsSent
+          if (payload >= 160) codec.name = 'opus+red'
+        }
+        return codec
+      })(),
       // The single sanctioned read of `raw`: cumulative wire bytes, which the
       // assembled model drops in favour of rates.
       bytes: s.raw ? (s.dir === 'in' ? s.raw.bytesReceived : s.raw.bytesSent) ?? null : null,
@@ -136,10 +156,13 @@ function pageSnapshot() {
       pli: s.pli ?? null,
       keyframes: s.keyframes ?? null,
       encoder: s.encoder ?? null,
-      // A screen-capture track's label is a capture source, not a device name.
+      // A screen-capture track's label is a capture source, not a device
+      // name — and a synthetic share (capture-shim.js) has no label at all,
+      // only its tag in __botScreenTrackIds__.
       role:
         s.kind === 'video'
-          ? /web-contents|screen|window|tab/iu.test(linked?.label ?? '')
+          ? window.__botScreenTrackIds__?.has(s.track) ||
+            /web-contents|screen|window|tab/iu.test(linked?.label ?? '')
             ? 'screen'
             : 'camera'
           : null,
@@ -147,10 +170,31 @@ function pageSnapshot() {
     })
   }
 
+  // What this browser can SEND, for the dashboard's codec dropdowns — sender
+  // capabilities only, so a decode-only codec is never offered as a choice.
+  // The plumbing entries (retransmission, forward error correction, comfort
+  // noise, DTMF) are not codecs anyone picks; audio 'red' stays, because
+  // preferring it is how Opus redundancy is switched on.
+  const sendCaps = (kind, dropped) => {
+    const names = []
+    for (const codec of window.RTCRtpSender?.getCapabilities?.(kind)?.codecs ?? []) {
+      const name = (codec.mimeType || '').split('/')[1]?.toLowerCase()
+      if (name && !dropped.includes(name) && !names.includes(name)) names.push(name)
+    }
+    return names
+  }
+
   return {
     t: m.t,
     pcs: m.pcs,
     via: Boolean(m.viaTransport),
+    caps: {
+      audio: sendCaps('audio', ['red', 'cn', 'telephone-event']),
+      video: sendCaps('video', ['rtx', 'red', 'ulpfec', 'flexfec-03']),
+    },
+    // Per-role, what this bot's CURRENT negotiation can carry — the dashboard
+    // greys out the rest. null on a page without the codec shim.
+    negotiated: window.__botCodecNegotiated__?.() ?? null,
     down: m.down ?? null,
     up: m.up ?? null,
     rtt: m.rtt ?? null,

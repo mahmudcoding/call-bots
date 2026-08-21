@@ -38,6 +38,11 @@ const state = (status, session = null, extra = {}) => ({
   startedAt: status === 'idle' ? null : 1,
   lastError: null,
   machine: { memGB: 16, cores: 8, recommendedMax: 6, platform: 'test' },
+  system: {
+    cpu: 34.2,
+    mem: { total: 16 * 1024 ** 3, avail: 6 * 1024 ** 3 },
+    net: { down: 2100, up: 4300 },
+  },
   browserReady: true,
   browserInstalling: false,
   browserProgress: null,
@@ -72,6 +77,7 @@ const roster = (states, sizes = [states.length]) => {
       mic: guestState === 'in-call' ? 'on' : null,
       cam: guestState === 'in-call' ? 'on' : null,
       screen: guestState === 'in-call' ? 'off' : null,
+      codecs: { audio: null, video: guestState === 'in-call' ? 'vp9' : null, screen: null },
       rtc: guestState === 'in-call'
         ? { pcs: 1, via: false, down: 1830, up: 940, rtt: 45, loss: 0.2, jit: 9, in: { a: 1, v: 2 }, out: { a: 1, v: 1 }, limit: null }
         : null,
@@ -86,6 +92,9 @@ const roster = (states, sizes = [states.length]) => {
 const RTC_SNAP = {
   t: 1_755_000_000_000, pcs: 1, via: false, down: 1830, up: 940, rtt: 45, loss: 0.2, jitter: 9,
   avail: 2500, limit: 'bandwidth', dtls: 'connected',
+  caps: { audio: ['opus'], video: ['vp8', 'vp9', 'h264', 'av1'] },
+  // h264 is sendable but not in this call's negotiation — its option greys out.
+  negotiated: { audio: ['opus'], video: ['vp8', 'vp9', 'av1'], screen: [] },
   localCand: { type: 'host', proto: 'udp', net: 'wifi', relay: null },
   remoteCand: { type: 'srflx', proto: 'udp' },
   outbound: [
@@ -97,6 +106,16 @@ const RTC_SNAP = {
       kbps: 40, w: null, h: null, fps: null, codec: { name: 'opus', clock: 48000, channels: 2 },
       bytes: 200_000, rid: null, limit: null, active: true, rtt: 45, fraction: 0,
       remoteJitter: 6, nack: 0, pli: 0, keyframes: null, encoder: null, role: null, level: 0.4 },
+    // an SFU-paused layer of the LIVE camera track: idle, must stay visible
+    { id: 'o3', kind: 'video', dir: 'out', ssrc: 333322, mid: '0', track: 't-local-v', name: 'Bot 1',
+      kbps: 0, w: 640, h: 360, fps: 0, codec: { name: 'VP8', clock: 90000, channels: null },
+      bytes: 10_000, rid: 'q', limit: null, active: false, rtt: 45, fraction: 0,
+      remoteJitter: 8, nack: 0, pli: 0, keyframes: 1, encoder: 'libvpx', role: 'camera', level: null },
+    // a leftover publication whose whole track carries nothing: dead, hidden
+    { id: 'o4', kind: 'video', dir: 'out', ssrc: 444422, mid: '5', track: 't-dead-v', name: 'Bot 1',
+      kbps: 0, w: null, h: null, fps: 0, codec: { name: 'VP9', clock: 90000, channels: null },
+      bytes: 9_000, rid: null, limit: null, active: false, rtt: null, fraction: null,
+      remoteJitter: null, nack: 0, pli: 0, keyframes: 0, encoder: null, role: 'camera', level: null },
   ],
   inbound: [
     { id: 'i1', kind: 'video', dir: 'in', ssrc: 333333, mid: '2', track: 't-rem-v', name: 'Alice',
@@ -194,6 +213,19 @@ try {
   console.log('\nidle')
   await push(state('idle'))
   check('no Stop button before a session', !(await stopBtn.isVisible()))
+  check('the header shows the machine: CPU, RAM, network',
+    (await page.locator('#sysCpu').textContent()) === 'CPU 34%' &&
+      (await page.locator('#sysMem').textContent()) === 'RAM 10.0 GB' &&
+      (await page.locator('#sysNet').textContent()) === '↓ 2.1 Mbps ↑ 4.3 Mbps',
+    JSON.stringify(await page.locator('#sysCpu, #sysMem, #sysNet').allTextContents()))
+  await push(state('idle', null, { system: { cpu: 97, mem: null, net: null } }))
+  check('a slammed CPU wears the danger tone, empty fields hide their chips',
+    (await page.locator('#sysCpu.-danger').count()) === 1 &&
+      !(await page.locator('#sysMem').isVisible()) && !(await page.locator('#sysNet').isVisible()))
+  await push(state('idle', null, { system: null }))
+  check('an older server without system data leaves the header clean',
+    !(await page.locator('#sysCpu').isVisible()))
+  await push(state('idle'))
   check('Send bots is offered', (await goBtn.textContent()) === 'Send bots')
   check('Send bots is enabled', !(await goBtn.isDisabled()))
   check('no all-bots bar', !(await page.locator('#allbar').isVisible()))
@@ -263,17 +295,83 @@ try {
     .locator('.card[data-slug="bot-1"]')
     .evaluate((card) => card.classList.contains('rtc-open')))
   await page.waitForFunction(
-    () => document.querySelectorAll('.card[data-slug="bot-1"] .srow').length === 4,
+    () => document.querySelectorAll('.card[data-slug="bot-1"] .srow').length === 5,
   )
-  check('one row per stream, sending and receiving', true)
+  check('one row per living stream, sending and receiving', true)
+  const panelText = await page.locator('.card[data-slug="bot-1"] .rtcpanel').textContent()
+  check('a dead publication is hidden, the paused layer of a live track stays as idle',
+    panelText.includes('Sending · 3') && panelText.includes('idle'))
   check('a 0 kbps receiving stream is hidden and the count matches',
     (await page.locator('.card[data-slug="bot-1"] .rtcpanel').textContent()).includes('Receiving · 2'))
   check('streams carry the names joined inside the bot page',
     (await page.locator('.card[data-slug="bot-1"] .rtcpanel').textContent()).includes('Alice'))
-  check('45 ms / 0.2% / 9 ms reads as excellent',
-    (await page.locator('.card[data-slug="bot-1"] .rhero .qw').textContent()) === 'excellent')
   check('the encoder limitation is surfaced',
     await page.locator('.card[data-slug="bot-1"] .rwarn').isVisible())
+
+  console.log('\ncodec controls')
+  const codecBar = page.locator('.card[data-slug="bot-1"] [data-codec-bar]')
+  const menu = page.locator('.cmenu')
+  check('the codec bar appears with the snapshot', await codecBar.isVisible())
+  check('one picker per role', (await codecBar.locator('[data-codec-role]').count()) === 3)
+  await codecBar.locator('[data-codec-role="video"]').click()
+  const videoRows = await menu.locator('.crow').evaluateAll(
+    (rows) => rows.map((row) => row.textContent.replace('✓', '').trim()),
+  )
+  check('the menu offers exactly what the call can carry, in the fixed order',
+    JSON.stringify(videoRows) === '["VP9","VP8","AV1"]',
+    JSON.stringify(videoRows))
+  check('rows are bare uppercase codec names',
+    videoRows.every((row) => row === row.toUpperCase() && !/cam|mic|screen/iu.test(row)))
+  check('the menu is app-drawn and fully on screen',
+    await menu.evaluate((node) => {
+      const box = node.getBoundingClientRect()
+      return getComputedStyle(node).position === 'fixed' &&
+        box.top >= 0 && box.bottom <= window.innerHeight
+    }))
+  check('the card holds its hover lift while its menu is open',
+    await page.locator('.card[data-slug="bot-1"]').evaluate((card) =>
+      card.classList.contains('menu-open') &&
+        getComputedStyle(card).transform !== 'none'))
+  await push(state('running', roster(['in-call', 'in-call'])))
+  check('a state push never yanks an open menu away',
+    (await menu.count()) === 1 &&
+      (await codecBar.locator('[data-codec-role="video"].-open').count()) === 1)
+  await page.keyboard.press('Escape')
+  check('Escape closes the menu', (await menu.count()) === 0)
+  check('with nothing forced the picker reads the codec in use',
+    (await codecBar.locator('[data-codec-role="audio"]').textContent()) === 'OPUS' &&
+      !(await codecBar.locator('[data-codec-role="audio"]').evaluate((node) => node.classList.contains('-forced'))))
+  check('a forced codec wears the accent mark',
+    (await codecBar.locator('[data-codec-role="video"]').textContent()) === 'VP9' &&
+      (await codecBar.locator('[data-codec-role="video"]').evaluate((node) => node.classList.contains('-forced'))))
+  check('no live sender and nothing forced still reads Auto',
+    (await codecBar.locator('[data-codec-role="screen"]').textContent()) === 'Auto')
+  await codecBar.locator('[data-codec-role="audio"]').click()
+  check('the menu ticks the codec in effect',
+    (await menu.locator('.crow.-on').textContent()).replace('✓', '').trim() === 'OPUS')
+  await page.keyboard.press('Escape')
+  await codecBar.locator('[data-codec-role="screen"]').click()
+  check('a role with no live sender still offers everything the browser can send',
+    (await menu.locator('.crow').count()) === 4)
+  const codecAction = await (async () => {
+    const sent = page.waitForRequest(
+      (request) => request.method() === 'POST' && request.url().endsWith('/api/action'),
+    )
+    await menu.locator('.crow', { hasText: 'VP8' }).first().click()
+    return (await sent).postDataJSON()
+  })()
+  check('picking a codec posts the action for that one bot',
+    codecAction.slug === 'bot-1' && codecAction.action === 'codec' &&
+      codecAction.value?.role === 'screen' && codecAction.value?.codec === 'vp8',
+    JSON.stringify(codecAction))
+  check('the picker shows the codec the server holds for the bot',
+    (await codecBar.locator('[data-codec-role="video"]').textContent()) === 'VP9')
+  const captions = await codecBar.locator('[data-codec-live]').evaluateAll(
+    (nodes) => nodes.map((node) => node.textContent),
+  )
+  check('captions are plain role names — the codec lives in the button',
+    captions[0] === 'Mic' && captions[1] === 'Cam' && captions[2] === 'Screen',
+    JSON.stringify(captions))
   await monitorBtn.click()
   check('closing the monitor collapses the card', !(await page
     .locator('.card[data-slug="bot-1"]')
@@ -300,6 +398,18 @@ try {
   const forAll = await actionOf(page.locator('[data-all=mute]'))
   check('the all-bots bar still acts on every bot',
     forAll.slug === 'all' && forAll.action === 'mute', JSON.stringify(forAll))
+  const codecForAll = await (async () => {
+    const sent = page.waitForRequest(
+      (request) => request.method() === 'POST' && request.url().endsWith('/api/action'),
+    )
+    await page.locator('[data-all-codec="video"]').click()
+    await page.locator('.cmenu .crow', { hasText: 'H264' }).click()
+    return (await sent).postDataJSON()
+  })()
+  check('the all-bots codec selects act on every bot too',
+    codecForAll.slug === 'all' && codecForAll.action === 'codec' &&
+      codecForAll.value?.role === 'video' && codecForAll.value?.codec === 'h264',
+    JSON.stringify(codecForAll))
   const forBatch = await actionOf(page.locator('[data-batch="2"] [data-batch-remove]'))
   check('one button removes the whole batch',
     forBatch.slug === 'batch:2' && forBatch.action === 'leave', JSON.stringify(forBatch))
@@ -322,6 +432,9 @@ try {
   check('the empty state returns', await page.locator('#empty').isVisible())
   check('stream monitor state goes with the cards',
     await page.evaluate(() => S.rtc.size === 0))
+  check('the fleet codec pickers forget the old session too',
+    (await page.locator('[data-all-codec="video"]').textContent()) === 'Auto' &&
+      (await page.locator('[data-all-codec="audio"]').textContent()) === 'OPUS')
 
   console.log('\nreopen')
   await page.close()

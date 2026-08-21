@@ -5,6 +5,7 @@
 #
 #   ./run.sh --link "https://…/join/<token>" --bots 10 --camera off --mic off
 #   ./run.sh --link "https://…/join/<token>" --bots 3 --share 1
+#   ./run.sh --link "https://…/join/<token>" --bots 5 --video-codec vp9
 #   ./run.sh --link "https://…/join/<token>" --ui     # dashboard on :4610
 #   ./run.sh --check                                  # set up, send no bots
 #   ./run.sh --clean                                  # remove everything it made
@@ -26,6 +27,7 @@ esac
 PREFIX="$ROOT/.server"
 
 LINK=""; BOTS=2; CAMERA=on; MIC=on; SHARE=""; MODE=join
+AUDIO_CODEC=""; VIDEO_CODEC=""; SCREEN_CODEC=""
 PORT=4610; SYSTEM_DEPS=1; CHECK_ONLY=0; DO_CLEAN=0
 
 die()  { printf '\n\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -39,6 +41,9 @@ while [ $# -gt 0 ]; do
     --camera)   CAMERA="${2:-}"; shift 2 ;;
     --mic)      MIC="${2:-}"; shift 2 ;;
     --share)    SHARE="${2:-}"; shift 2 ;;
+    --audio-codec)  AUDIO_CODEC="${2:-}"; shift 2 ;;
+    --video-codec)  VIDEO_CODEC="${2:-}"; shift 2 ;;
+    --screen-codec) SCREEN_CODEC="${2:-}"; shift 2 ;;
     --port)     PORT="${2:-}"; shift 2 ;;
     --ui)       MODE=ui; shift ;;
     --check)    CHECK_ONLY=1; shift ;;
@@ -216,4 +221,7 @@ say "sending $BOTS bot(s) — camera $CAMERA, mic $MIC"
 say "the call needs entry mode Open: nobody is here to admit them"
 printf '\n'
 exec node src/cli.mjs join "$LINK" --bots "$BOTS" --camera "$CAMERA" --mic "$MIC" \
-  ${SHARE:+--share "$SHARE"}
+  ${SHARE:+--share "$SHARE"} \
+  ${AUDIO_CODEC:+--audio-codec "$AUDIO_CODEC"} \
+  ${VIDEO_CODEC:+--video-codec "$VIDEO_CODEC"} \
+  ${SCREEN_CODEC:+--screen-codec "$SCREEN_CODEC"}
