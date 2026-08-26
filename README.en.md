@@ -29,8 +29,10 @@ starts in about a second. Works on macOS and Ubuntu.
 `--ui` opens a dashboard on `http://127.0.0.1:4610` with a card per bot: mute,
 camera, screen share, send codecs, remove, and the same for all of them at
 once; the header shows the computer's live CPU, RAM and network throughput,
-so the headroom for more bots is always in view. It binds
-to localhost, so on a server reach it through a tunnel:
+so the headroom for more bots is always in view. Pin the bot you keep coming
+back to and its card moves to a row of its own above every batch, so it is
+never a scroll away. It binds to localhost, so on a server reach it through a
+tunnel:
 
 ```bash
 ssh -L 4610:127.0.0.1:4610 <user>@<server>

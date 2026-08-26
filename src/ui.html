@@ -205,6 +205,7 @@
   .ava { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; flex: none; }
   .who .nm { font-weight: 650; font-size: 14px; }
   .who .sub { color: var(--faint); font-size: 11.5px; }
+  .who .gap { flex: 1; }
   .controls { display: flex; align-items: center; gap: 6px; }
   .ibtn {
     width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm);
@@ -227,6 +228,20 @@
   .controls .gap { flex: 1; }
   .err { margin-top: 10px; color: var(--danger); font-size: 12px; display: none; }
   .card.has-error .err { display: block; }
+
+  /* ---------- pinned bots ---------- */
+  /* A pin is a view preference, not something the bot does, so its button
+     stays quieter than the media controls under it — until it is on. */
+  .ibtn.-pin { width: 28px; height: 28px; border-color: transparent; background: none; }
+  .ibtn.-pin svg { width: 14px; height: 14px; }
+  .ibtn.-pin:hover { background: var(--card-2); }
+  .ibtn.-pin.-on { color: var(--accent-2); border-color: rgba(109,94,252,.5); background: var(--accent-soft); }
+  /* Declared after .card:hover so a pinned card keeps its mark under the
+     pointer — it is the same card the section above is made of. */
+  .card.-pinned { border-color: rgba(109,94,252,.4); }
+  #pinned { margin-bottom: 22px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  #pinned .bhead .nm { color: var(--accent-2); }
+  .bnote { font-size: 12px; color: var(--faint); }
 
   /* ---------- per-bot stream monitor ---------- */
   .rtcbar {
@@ -348,6 +363,16 @@
       <span id="emptyText">Paste the invite link, choose how many bots, and send them in.</span>
     </div>
 
+    <div id="pinned" hidden>
+      <div class="bhead">
+        <span class="nm">Pinned</span>
+        <span class="sub"></span>
+        <span class="spacer"></span>
+        <button class="btn" id="unpinAll" title="Send every pinned bot back to its batch">Unpin all</button>
+      </div>
+      <div class="grid"></div>
+    </div>
+
     <div id="cards"></div>
   </div>
 </main>
@@ -368,6 +393,7 @@ const I = {
   share: svg('<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>'),
   leave: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>'),
   pulse: svg('<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>'),
+  pin: svg('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>'),
 }
 
 const $ = (sel, root = document) => root.querySelector(sel)
@@ -390,7 +416,13 @@ const post = async (url, body) => {
   return data
 }
 
-const S = { state: null, cards: new Map(), groups: new Map(), rtc: new Map(), errorShown: null, camOn: true, micOn: true }
+const S = {
+  state: null, cards: new Map(), groups: new Map(), rtc: new Map(),
+  errorShown: null, camOn: true, micOn: true,
+  pinned: new Set(),
+  // undefined until the first state arrives — null is a real value here (idle).
+  pinnedAt: undefined,
+}
 
 /* ---------- saved label ---------- */
 const LABEL_STORAGE_KEY = 'call-bots-label'
@@ -626,9 +658,58 @@ const buildGroup = (batch) => {
       <button class="btn -danger" data-batch-remove
         title="Remove every bot that came in with this batch">Remove batch</button>
     </div>
-    <div class="grid"></div>`
+    <div class="grid"></div>
+    <div class="bnote" hidden>every bot of this send is pinned above</div>`
   $('[data-batch-remove]', group).onclick = (event) => removeBatch(batch.id, event.currentTarget)
   return group
+}
+
+/* ---------- pinned bots: the ones you keep coming back to, kept on top ---------- */
+// A pin is a view preference, not fleet state, so it lives in the panel — and
+// it belongs to the session it was made in: bot slugs restart at bot-1 with
+// the next call, and a leftover pin would grab an unrelated bot.
+const PIN_STORAGE_KEY = 'call-bots-pins'
+const savePins = () => {
+  try {
+    localStorage.setItem(
+      PIN_STORAGE_KEY, JSON.stringify({ at: S.pinnedAt, slugs: [...S.pinned] }),
+    )
+  } catch { /* the pins still work for this page without storage */ }
+}
+// Reloading the panel mid-call must not lose them, so they are read back when
+// the session is still the one they were made in — and dropped when it is not.
+const syncPins = (startedAt) => {
+  if (startedAt === S.pinnedAt) return
+  S.pinnedAt = startedAt
+  let saved = null
+  try { saved = JSON.parse(localStorage.getItem(PIN_STORAGE_KEY) ?? 'null') }
+  catch { /* unreadable storage reads the same as no pins */ }
+  S.pinned = new Set(saved?.at === startedAt && Array.isArray(saved.slugs) ? saved.slugs : [])
+}
+const togglePin = (slug) => {
+  if (!S.pinned.delete(slug)) S.pinned.add(slug)
+  savePins()
+  if (S.state) render(S.state)
+}
+$('#unpinAll').onclick = () => {
+  S.pinned.clear()
+  savePins()
+  if (S.state) render(S.state)
+}
+
+// Cards move between the pinned section and their batch, so their order is
+// settled here rather than by the append that created them. Only the ones out
+// of place are re-inserted: moving a card that is already where it belongs
+// would drop the pointer's hover and restart the card's transitions.
+const placeCards = (grid, cards) => {
+  let moved = false
+  for (const [i, card] of cards.entries()) {
+    if (grid.children[i] === card) continue
+    grid.insertBefore(card, grid.children[i] ?? null)
+    moved = true
+  }
+  // A card that moved carried an open codec menu's anchor with it.
+  if (moved) placeCodecMenu()
 }
 
 /* ---------- bot cards ---------- */
@@ -648,6 +729,9 @@ const buildCard = (guest) => {
         <div style="min-width:0">
           <div class="nm">${esc(guest.label)}</div>
         </div>
+        <span class="gap"></span>
+        <button class="ibtn -pin" data-pin aria-pressed="false"
+          title="Pin to the top">${I.pin}</button>
       </div>
       <div class="controls">
         <button class="ibtn" data-act="mic" title="Toggle microphone">${I.mic}</button>
@@ -672,8 +756,10 @@ const buildCard = (guest) => {
   for (const btn of card.querySelectorAll('[data-act]')) {
     btn.onclick = () => cardAction(guest.slug, btn.dataset.act, btn)
   }
-  // Not a data-act: the monitor toggle is purely client-side, no server action.
+  // Not a data-act: neither the monitor toggle nor the pin asks the server for
+  // anything — they only change what this panel shows.
   $('[data-rtc-toggle]', card).onclick = () => toggleRtc(guest.slug, card)
+  $('[data-pin]', card).onclick = () => togglePin(guest.slug)
   return card
 }
 
@@ -706,8 +792,15 @@ const updateCard = (guest, grid) => {
   if (!card) {
     card = buildCard(guest)
     S.cards.set(guest.slug, card)
-    grid.append(card)
   }
+  // Pinning moves the card between grids; placeCards settles its order there.
+  if (card.parentElement !== grid) grid.append(card)
+  const pinned = S.pinned.has(guest.slug)
+  card.classList.toggle('-pinned', pinned)
+  const pin = $('[data-pin]', card)
+  pin.classList.toggle('-on', pinned)
+  pin.setAttribute('aria-pressed', String(pinned))
+  pin.title = pinned ? 'Unpin — send it back to its batch' : 'Pin to the top'
   const failed = guest.state.startsWith('error')
   const base = failed ? 'error' : guest.state
   const pill = $('.thumb .pill', card)
@@ -1129,6 +1222,19 @@ const render = (state) => {
   const guests = state.session?.guests ?? []
   const batches = state.session?.batches ?? []
   $('#empty').hidden = guests.length > 0
+  syncPins(state.startedAt)
+
+  // A pinned bot leaves its batch grid for the section above every batch —
+  // reaching the bot you keep working with is the whole point, and scrolling
+  // for it is what a pin is against. It keeps its place in the roster order.
+  const pinnedGroup = $('#pinned')
+  const pinnedGrid = $('.grid', pinnedGroup)
+  const pinned = guests.filter((guest) => S.pinned.has(guest.slug))
+  pinnedGroup.hidden = pinned.length === 0
+  $('.bhead .sub', pinnedGroup).textContent = `${pinned.length} bot${pinned.length === 1 ? '' : 's'}`
+  for (const guest of pinned) updateCard(guest, pinnedGrid)
+  placeCards(pinnedGrid, pinned.map((guest) => S.cards.get(guest.slug)))
+
   for (const batch of batches) {
     let group = S.groups.get(batch.id)
     if (!group) {
@@ -1139,13 +1245,20 @@ const render = (state) => {
       $('#cards').append(group)
     }
     const mine = guests.filter((guest) => guest.batch === batch.id)
+    // The count stays the batch's own: a pinned bot is shown elsewhere, it did
+    // not leave the send it arrived in, and Remove batch still takes it out.
     $('.bhead .sub', group).textContent =
       `${mine.length} bot${mine.length === 1 ? '' : 's'} · sent ${clock(batch.at)}`
     // Removing a batch takes as long as closing its browsers; a snapshot
     // arriving meanwhile must not hand the button back mid-request.
     const remove = $('[data-batch-remove]', group)
     if (!remove.dataset.busy) remove.disabled = !running
-    for (const guest of mine) updateCard(guest, $('.grid', group))
+    const here = mine.filter((guest) => !S.pinned.has(guest.slug))
+    const grid = $('.grid', group)
+    for (const guest of here) updateCard(guest, grid)
+    placeCards(grid, here.map((guest) => S.cards.get(guest.slug)))
+    // Pinning every bot of a send would otherwise leave a heading over a gap.
+    $('.bnote', group).hidden = here.length > 0
   }
   for (const [id, group] of S.groups) {
     if (!batches.some((batch) => batch.id === id)) {
@@ -1153,10 +1266,14 @@ const render = (state) => {
       S.groups.delete(id)
     }
   }
+  let unpinned = false
   for (const [slug, card] of S.cards) {
     if (!guests.some((guest) => guest.slug === slug)) {
       card.remove()
       S.cards.delete(slug)
+      // A bot that is gone takes its pin with it, or it would come back to
+      // haunt the next bot handed the same slug.
+      if (S.pinned.delete(slug)) unpinned = true
       // The card takes its stream-monitor state with it — a poll timer must
       // not outlive the bot it polls for.
       const entry = S.rtc.get(slug)
@@ -1164,6 +1281,7 @@ const render = (state) => {
       S.rtc.delete(slug)
     }
   }
+  if (unpinned) savePins()
 }
 
 /* ---------- live updates ---------- */

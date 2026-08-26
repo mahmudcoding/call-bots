@@ -10,7 +10,9 @@
 //
 // It also pins the grouping: bots are sent into the same call more than once,
 // each send is its own batch, and one button takes a whole batch back out
-// without touching the batches around it or the per-bot controls.
+// without touching the batches around it or the per-bot controls. And the
+// pins on top of that: a bot lifted out of its batch into the section above
+// keeps every control it had, and never becomes a bot the server hears about.
 //
 //   node scripts/test-ui.mjs
 import { readFileSync } from 'node:fs'
@@ -153,6 +155,7 @@ try {
   })
 
   const stops = []
+  const actions = []
   await context.route('**/*', (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -171,6 +174,7 @@ try {
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
     }
     if (request.method() === 'POST' && path === '/api/action') {
+      actions.push(request.postDataJSON())
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -396,6 +400,68 @@ try {
   check('every bot still has its own controls',
     (await page.locator('.card [data-act=leave]').count()) === 5)
 
+  console.log('\npinned bots')
+  const pinned = page.locator('#pinned')
+  const pinOf = (slug) => page.locator(`.card[data-slug="${slug}"] [data-pin]`)
+  check('nothing is pinned to begin with', !(await pinned.isVisible()))
+  const quiet = actions.length
+  await pinOf('bot-4').click()
+  check('pinning is the panel\'s own business — the server is never told',
+    actions.length === quiet)
+  check('the bot lands in the section above every batch',
+    (await pinned.isVisible()) && (await pinned.locator('.card[data-slug="bot-4"]').count()) === 1)
+  check('and leaves the grid of the send it came in with',
+    (await page.locator('[data-batch="2"] .card').count()) === 2)
+  check('the send still counts it as one of its own',
+    (await page.locator('[data-batch="2"] .bhead .sub').textContent()).startsWith('3 bots'))
+  await push(state('running', roster(['in-call', 'in-call', 'in-call', 'in-call', 'in-call'], [2, 3])))
+  check('a state push leaves the pin where it is',
+    (await pinned.locator('.card[data-slug="bot-4"]').count()) === 1)
+  const fromPinned = await actionOf(pinned.locator('.card[data-slug="bot-4"] [data-act=mic]'))
+  check('a pinned card still drives its own bot',
+    fromPinned.slug === 'bot-4' && fromPinned.action === 'mute', JSON.stringify(fromPinned))
+  await pinOf('bot-1').click()
+  const pinOrder = await pinned.locator('.card').evaluateAll(
+    (cards) => cards.map((card) => card.dataset.slug),
+  )
+  check('pinned bots keep the roster order, not the order they were pinned',
+    JSON.stringify(pinOrder) === '["bot-1","bot-4"]', JSON.stringify(pinOrder))
+  await pinOf('bot-2').click()
+  check('a send with every bot pinned says so instead of showing a heading over a gap',
+    (await page.locator('[data-batch="1"] .card').count()) === 0 &&
+      (await page.locator('[data-batch="1"] .bnote').isVisible()))
+  await pinOf('bot-2').click()
+  check('unpinning puts the card back among the bots it arrived with',
+    (await page.locator('[data-batch="1"] .card').evaluateAll(
+      (cards) => cards.map((card) => card.dataset.slug),
+    )).join() === 'bot-2' && !(await page.locator('[data-batch="1"] .bnote').isVisible()))
+
+  // A pin is worth nothing if reloading the window loses it, and worse than
+  // nothing if it survives into the next call, where bot-1 is a different bot.
+  const rejoin = await context.newPage()
+  const pushTo = (target, nextState) =>
+    target.evaluate((s) => {
+      window.__es.onmessage({ data: JSON.stringify({ type: 'state', state: s }) })
+    }, nextState)
+  await rejoin.goto('http://call-bots.test/')
+  await pushTo(rejoin, state('running', roster(['in-call', 'in-call', 'in-call', 'in-call', 'in-call'], [2, 3])))
+  check('a pin survives reopening the panel on the same call',
+    (await rejoin.locator('#pinned .card').evaluateAll(
+      (cards) => cards.map((card) => card.dataset.slug),
+    )).join() === 'bot-1,bot-4')
+  await pushTo(rejoin, state('running', roster(['in-call', 'in-call'], [2]), { startedAt: 2 }))
+  check('the next call starts with none — its bot-1 is a different bot',
+    !(await rejoin.locator('#pinned').isVisible()))
+  await rejoin.close()
+
+  await page.locator('#unpinAll').click()
+  check('Unpin all empties the section and hands every card back to its send',
+    !(await pinned.isVisible()) &&
+      (await page.locator('[data-batch="1"] .card').count()) === 2 &&
+      (await page.locator('[data-batch="2"] .card').count()) === 3)
+  // Left pinned on purpose: the batch below is removed with this bot in it.
+  await pinOf('bot-4').click()
+
   const perBot = await actionOf(page.locator('[data-batch="2"] .card [data-act=mic]').first())
   check('a card control still acts on that one bot',
     perBot.slug === 'bot-3' && perBot.action === 'mute', JSON.stringify(perBot))
@@ -427,6 +493,8 @@ try {
     (await page.locator('[data-batch="1"] .card').count()) === 2)
   check('the remove button comes back for the next removal',
     !(await page.locator('[data-batch="1"] [data-batch-remove]').isDisabled()))
+  check('a pinned bot removed with its batch takes its pin with it',
+    !(await pinned.isVisible()) && (await page.evaluate(() => !S.pinned.has('bot-4'))))
 
   console.log('\nidle again — the session ended')
   await push(state('idle'))
@@ -436,6 +504,7 @@ try {
   check('the empty state returns', await page.locator('#empty').isVisible())
   check('stream monitor state goes with the cards',
     await page.evaluate(() => S.rtc.size === 0))
+  check('the pins go with the session too', await page.evaluate(() => S.pinned.size === 0))
   check('the fleet codec pickers forget the old session too',
     (await page.locator('[data-all-codec="video"]').textContent()) === 'Auto' &&
       (await page.locator('[data-all-codec="audio"]').count()) === 0)
