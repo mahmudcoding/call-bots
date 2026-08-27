@@ -31,8 +31,10 @@ camera, screen share, send codecs, remove, and the same for all of them at
 once; the header shows the computer's live CPU, RAM and network throughput,
 so the headroom for more bots is always in view. Pin the bot you keep coming
 back to and its card moves to a row of its own above every batch, so it is
-never a scroll away. It binds to localhost, so on a server reach it through a
-tunnel:
+never a scroll away. A bot's stream monitor opens with the path ICE settled
+on — `direct · STUN · UDP`, or `via TURN relay` when the media is detouring
+through a relay — with the candidate types and DTLS state on hover. It binds
+to localhost, so on a server reach it through a tunnel:
 
 ```bash
 ssh -L 4610:127.0.0.1:4610 <user>@<server>
@@ -65,11 +67,22 @@ replace the camera clips. Sources and licences are in
   was previously *On request*, send the bots again: Aloqa does not lift that one
   for anyone already in the call.
 - **Send codecs.** `--audio-codec`, `--video-codec` and `--screen-codec` choose
-  what a bot *sends* (`opus`; `vp8`/`vp9`/`h264`/`av1`/`h265`).
-  In the dashboard, camera and screenshare dropdowns sit on each bot's stream
-  monitor and in the all-bots bar (audio is opus-only, so it has no picker) — switchable at any moment, mid-call included. A
-  bot's own dropdowns list only what its call actually negotiates, so every
-  choice offered is one that can land. A codec only ever changes through a
+  what a bot *sends* (`opus`; `vp8`/`vp9`/`h264`/`av1`/`h265`). In the
+  dashboard, camera and screenshare dropdowns sit on each bot's stream monitor
+  and in the all-bots bar (audio is opus-only, so it has no picker) —
+  switchable at any moment, mid-call included. To send bots in *on* a codec
+  instead of switching them afterwards, the **Codecs** link beside the
+  *Join with* label brings out the same two pickers next to the camera and
+  microphone toggles — folded away by default, so the bar stays one row. They
+  ride the next send and leave the bots already in the call alone. A codec that turns out to carry nothing — H265 stalls on
+  some machines — is handed back to the call's own codec at the join, and the
+  bot's card says so. An encoder can also wedge later, mid-call and on any
+  codec; a camera that publishes nothing for twelve seconds is turned off
+  and on, then rejoined on a fresh connection, and if neither works the card
+  says the call cannot see that bot. A bot going dark is never silent about it: its own tile stays lit
+  either way, because a self-view never reaches the network. A bot's own
+  dropdowns list only what its call actually negotiates, so every choice
+  offered is one that can land. A codec only ever changes through a
   negotiation the call takes part in — anything else would black the bot out
   for every other participant. On Aloqa the bot republishes its track the
   LiveKit way, so a switch lands in a second or two; other platforms

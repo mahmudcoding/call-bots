@@ -11,6 +11,11 @@ import { findMarkedPids, killPids } from './procs.mjs'
 // queued behind them.
 const LAUNCH_CONCURRENCY = 2
 
+// How often every bot's camera is checked for having gone quiet. Comfortably
+// under the watchdog's own window, and off the dashboard's poll on purpose:
+// bots must heal in a headless run too, where nothing is ever watching.
+const HEALTH_MS = 5000
+
 const PROBE_TIMEOUT = 4000
 
 // Resolves to `fallback` rather than hanging when a browser is too busy to
@@ -59,6 +64,10 @@ export class Roster {
     this.tearingDown = false
     this.activeAdds = new Set()
     this.teardownPromise = null
+    this.healthTimer = setInterval(() => {
+      for (const guest of this.guests) guest.pollHealth().catch(() => {})
+    }, HEALTH_MS)
+    this.healthTimer.unref?.()
   }
 
   get callUrl() {
@@ -263,6 +272,9 @@ export class Roster {
               bounded(guest.rtcSummary(), null),
             ])
           : [null, null, null, null]
+        // Hand the health tick what was just read, so an open dashboard makes
+        // the watchdog free rather than doubling its work.
+        guest.health = { at: Date.now(), cam, rtc }
         return {
           index: i,
           slug: guest.user.slug,
@@ -275,6 +287,7 @@ export class Roster {
           screen,
           rtc,
           codecs: guest.codecs,
+          note: guest.note,
           lastError: guest.lastError,
         }
       }),
@@ -308,6 +321,9 @@ export class Roster {
   teardownAll() {
     if (this.teardownPromise) return this.teardownPromise
     this.tearingDown = true
+    // Nothing left to heal, and a tick firing mid-teardown would poke pages
+    // that are already closing.
+    clearInterval(this.healthTimer)
     this.teardownPromise = this.#finishTeardown()
     return this.teardownPromise
   }

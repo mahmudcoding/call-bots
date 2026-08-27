@@ -15,6 +15,7 @@
     "clean": "node src/cli.mjs clean",
     "postinstall": "node scripts/postinstall.mjs",
     "test:platforms": "node scripts/test-platforms.mjs",
+    "test:guest": "node scripts/test-guest.mjs",
     "test:ui": "node scripts/test-ui.mjs",
     "test:rtc": "node scripts/test-rtc.mjs",
     "test:stop": "node scripts/test-stop.mjs",

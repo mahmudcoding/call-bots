@@ -7,6 +7,56 @@ import { platformById } from './platforms/index.mjs'
 import { installMonitor, rtcSnapshot, rtcSummary } from './rtc.mjs'
 import { screenHtml, screenVideoPath } from './screen.mjs'
 
+// What each codec role is called when a bot has to explain itself.
+const ROLE_WORD = { audio: 'microphone', video: 'camera', screen: 'screenshare' }
+
+// A camera that has published nothing for this long is not having a blip.
+// Several monitor ticks, so a momentary 0 between keyframes cannot trip it.
+const DARK_MS = 12_000
+// Escalation, cheapest first — but only among steps that actually work. A
+// republish used to lead, on the reasoning that it is the gentlest fix; across
+// every wedge seen in the wild it healed nothing (0 of 7) while costing the bot
+// a further window of darkness, so it is gone. Recycling the camera goes
+// through the app's own buttons and has healed every wedge it met. A rejoin is
+// the only step that rebuilds the peer connection, which is what a wedge takes
+// down with it: the connection's bandwidth estimate collapses too (5 kbps was
+// measured on a wedged bot), so anything published into the same connection has
+// nothing to send with.
+const HEAL_STEPS = ['recycle', 'rejoin']
+export const DARK_NOTE = 'camera is publishing nothing — the call cannot see this bot'
+
+// What to do about a bot's outbound video this tick. Pure: all the state it
+// needs is passed in and all the state it changes is returned, so the part
+// worth getting right can be tested without a browser or a call.
+export const videoHealthStep = ({ inCall, camOn, upV, darkSince, attempts, now }) => {
+  // Nothing to judge — not in the call, camera deliberately off, or no stats
+  // yet. A bot that has not been measured is not a bot that is failing.
+  if (!inCall || !camOn || upV === null || upV === undefined) {
+    return { action: 'none', darkSince: null, attempts: 0 }
+  }
+  if (upV > 0) return { action: 'none', darkSince: null, attempts: 0 }
+  const since = darkSince ?? now
+  if (now - since < DARK_MS) return { action: 'none', darkSince: since, attempts }
+  if (attempts >= HEAL_STEPS.length) {
+    // Out of moves: say so once, then stop rather than thrash a bot that is
+    // never coming back on its own.
+    if (attempts === HEAL_STEPS.length) {
+      return { action: 'giveup', darkSince: since, attempts: attempts + 1 }
+    }
+    return { action: 'none', darkSince: since, attempts }
+  }
+  // Each attempt restarts the clock, so the next escalation gets a full window
+  // to see whether the last one worked.
+  return { action: HEAL_STEPS[attempts], darkSince: now, attempts: attempts + 1 }
+}
+
+// Which of a bot's outbound stream rows belong to one codec role.
+const roleStream = (role) => (stream) => {
+  if (role === 'audio') return stream.kind === 'audio'
+  if (role === 'screen') return stream.kind === 'video' && stream.role === 'screen'
+  return stream.kind === 'video' && stream.role !== 'screen'
+}
+
 // One anonymous participant: a real browser that opens the call link, types a
 // name, and publishes fake-device audio and video. No account, nothing to
 // provision. Everything platform-specific — how to get in, where the device
@@ -36,6 +86,26 @@ export class Guest {
     this.screenPage = null
     this.monitorInstall = null // in-flight stream-monitor install, so retries dedupe
     this.monitorWarned = false // warn once per breakage, not every status tick
+    // Last device+stats read, whoever made it. The dashboard's poll and the
+    // roster's health tick share it, so having the window open costs the
+    // watchdog nothing and having it closed does not stop the watchdog.
+    this.health = null
+    // What the camera was last ASKED to be, so a camera that is off because
+    // something dropped it can be told apart from one somebody turned off.
+    this.wantCam = null
+    this.camFixAttempts = 0
+    this.videoDarkSince = null // when the camera last stopped reaching anyone
+    this.videoHealAttempts = 0
+    this.healing = false // one heal at a time; the poll must never queue them
+    // Claimed synchronously on entry to pollHealth. `healing` is set only
+    // after two awaited page reads, and under load those can outlast the tick
+    // interval — two ticks would then both pass the guard and spend an
+    // escalation step each on the same fault.
+    this.polling = false
+    // Set when the bot is in the call but not doing what was asked of it —
+    // a launch codec that turned out to send nothing, say. Not an error: the
+    // bot works, just not on the codec it was sent with.
+    this.note = null
   }
 
   get label() {
@@ -108,6 +178,8 @@ export class Guest {
     // codec preferences — anything switched while this bot was still on its
     // way has to be pushed again now that the call page is settled.
     await this.#syncCodecs().catch(() => {})
+    // Only now can the wire be read, so only now can a launch codec be judged.
+    await this.#proveLaunchCodecs().catch(() => {})
     this.log.info('in call')
   }
 
@@ -177,8 +249,25 @@ export class Guest {
     return this.platform ? this.platform.setMic(this.#ctx(), on) : Promise.resolve('unknown')
   }
 
-  setCam(on) {
-    return this.platform ? this.platform.setCam(this.#ctx(), on) : Promise.resolve('unknown')
+  async setCam(on) {
+    if (!this.platform) return 'unknown'
+    // Intent, recorded before the attempt: whether it lands or not, this is
+    // what the camera is meant to be from here on.
+    this.wantCam = on
+    const state = await this.platform.setCam(this.#ctx(), on)
+    // The same republish a share born under a stored preference gets (see
+    // setScreen), for the same reason: seeding the preference only shapes the
+    // SDP, while the SFU forwards the publication by the codec the client's
+    // own publish request named. A camera arriving on a launch-time codec has
+    // to go out the LiveKit way to be the codec everyone else receives.
+    if (on && state === 'on' && this.codecs.video) {
+      await this.#lkSwitch('video', this.codecs.video).catch(() => {})
+      // At join this runs before the monitor is installed, so there is nothing
+      // to read yet — join() proves the codec a moment later, once there is. A
+      // camera switched on from the panel proves itself here and now.
+      if (this.monitorInstall) await this.#proveCodec('video').catch(() => {})
+    }
+    return state
   }
 
   // --- send codecs ----------------------------------------------------------
@@ -192,7 +281,23 @@ export class Guest {
   // negotiation happen — restart the share for the screen role, rejoin the
   // call for the others. Result strings ride the same toast path as the other
   // actions.
+  // A hand-picked codec is the user's call to make, so a switch that does not
+  // land is reported rather than undone. But a toast is gone in seconds and
+  // the card would go on showing the codec as though it were working, so the
+  // outcome stays on the bot until the next pick.
   async setCodec(role, codec) {
+    const result = await this.#applyCodec(role, codec)
+    const name = this.codecs[role] ?? codec
+    this.note =
+      result === 'unsupported'
+        ? `this browser cannot send ${name} — the ${ROLE_WORD[role]} is unchanged`
+        : result === 'unavailable' || result === 'requested'
+          ? `${name} never showed up on the wire for the ${ROLE_WORD[role]} — the stream rows show what the call took`
+          : null
+    return result
+  }
+
+  async #applyCodec(role, codec) {
     if (!['audio', 'video', 'screen'].includes(role)) {
       throw new Error(`unknown codec role "${role}" — audio, video or screen`)
     }
@@ -273,7 +378,7 @@ export class Guest {
       await this.leave()
       await this.join(this.target)
     } catch (error) {
-      this.log.warn(`rejoin for the codec change failed: ${error.message}`)
+      this.log.warn(`rejoin failed: ${error.message}`)
       return false
     }
     if (mic === 'on' || mic === 'off') await this.setMic(mic === 'on').catch(() => {})
@@ -288,11 +393,7 @@ export class Guest {
   // in stats — Chrome attributes a RED stream to the opus inside it — so red
   // settles on the negotiated top codec instead.
   async #codecSettled(role, wanted, budgetMs = 2500) {
-    const matches = (stream) => {
-      if (role === 'audio') return stream.kind === 'audio'
-      if (role === 'screen') return stream.kind === 'video' && stream.role === 'screen'
-      return stream.kind === 'video' && stream.role !== 'screen'
-    }
+    const matches = roleStream(role)
     const deadline = Date.now() + budgetMs
     while (Date.now() < deadline) {
       if (wanted === 'red') {
@@ -333,6 +434,174 @@ export class Guest {
       await this.page.waitForTimeout(500).catch(() => {})
     }
     return false
+  }
+
+  // --- proving a launch codec -----------------------------------------------
+
+  // A codec asked for at launch is only a REQUEST until the wire agrees. One
+  // the call happily negotiates can still carry nothing — an encoder that
+  // produces a single keyframe and then stalls publishes zero frames to every
+  // other participant, and nothing on this side looks wrong: the bot's own
+  // tile renders the raw camera track, upstream of the encoder, so the
+  // self-view is bright while the call sees a dark square. Chrome's HEVC send
+  // path on this stack is exactly that shape.
+  //
+  // So a launch codec is held to the same proof a runtime switch already gets:
+  // does a stream in that codec actually carry bytes. One that does not is
+  // handed back to the platform's own codec — a visible bot on the wrong
+  // codec beats an invisible bot on the right one — and the bot says so.
+  async #proveCodec(role) {
+    const wanted = this.codecs[role]
+    if (!wanted) return true
+    if ((await this.#codecSettled(role, wanted, 10_000)) && (await this.#codecHolds(role, wanted))) {
+      this.log.info(`${wanted} is carrying for the ${ROLE_WORD[role]}`)
+      return true
+    }
+    this.log.warn(`${wanted} carries nothing for the ${ROLE_WORD[role]} — falling back`)
+    this.codecs = { ...this.codecs, [role]: null }
+    // The page preference goes first: cleared after the republish, the next
+    // negotiation would put the dead codec straight back on the m-line.
+    await this.page
+      .evaluate((r) => window.__botSetCodec__?.(r, null) ?? null, role)
+      .catch(() => null)
+    await this.#lkSwitch(role, null).catch(() => {})
+    this.note = `${wanted} sent nothing from the ${ROLE_WORD[role]} — back on the call's own codec`
+    return false
+  }
+
+  // --- a camera that goes quiet mid-call ------------------------------------
+
+  // The join-time proof judges only the codec a bot ARRIVES on. An encoder can
+  // wedge later too, on any codec — both of the dark bots seen in the wild did,
+  // one of them on plain vp8 — and from this side it looks like nothing at all:
+  // the bot's own tile stays lit, because a self-view is the raw track upstream
+  // of the encoder, and the card stays green because audio keeps flowing. Only
+  // the outbound VIDEO rate tells the truth, so it is watched for as long as
+  // the camera is meant to be on.
+  //
+  // Called from the roster's own 2s poll with what that poll already read, so
+  // it costs no extra work; healing runs in the background and never holds it.
+  // The watchdog's own entry point, driven by the roster on a fixed tick so a
+  // bot heals whether or not anyone is watching it — a headless `join` run has
+  // no dashboard at all, and its bots have to come back just the same.
+  async pollHealth() {
+    if (this.state !== 'in-call' || !this.page || this.page.isClosed()) return
+    if (this.healing || this.polling) return
+    this.polling = true
+    try {
+      await this.#pollHealth()
+    } finally {
+      this.polling = false
+    }
+  }
+
+  async #pollHealth() {
+    const fresh = this.health && Date.now() - this.health.at < 4000
+    const cam = fresh ? this.health.cam : await this.camState().catch(() => 'unknown')
+    const rtc = fresh ? this.health.rtc : await this.rtcSummary().catch(() => null)
+    // A camera nobody turned off has to be put back before anything else: the
+    // video watchdog ignores an off camera on purpose, so a publication the
+    // app dropped — a codec fallback's republish that failed, say — would
+    // leave the bot dark for good with nothing watching. Bounded, because a
+    // camera that refuses to come on must not be clicked at forever.
+    if (cam === 'on') this.camFixAttempts = 0
+    else if (this.wantCam === true && cam === 'off' && this.camFixAttempts < 3) {
+      this.camFixAttempts += 1
+      this.healing = true
+      try {
+        this.log.warn('camera is off but was never turned off — turning it back on')
+        await this.setCam(true).catch(() => {})
+      } finally {
+        this.healing = false
+        this.health = null // the state just changed; do not judge it on a stale read
+      }
+      return
+    }
+    await this.checkVideoHealth(cam, rtc)
+  }
+
+  async checkVideoHealth(cam, rtc) {
+    // A heal in flight owns the clock (pollHealth guards the entry): without
+    // that, ticks landing during a ten-second rejoin would spend escalation
+    // steps the previous one never got a chance to prove — the bot would run
+    // out of moves while its first move was still in progress.
+    const step = videoHealthStep({
+      inCall: this.state === 'in-call',
+      camOn: cam === 'on',
+      upV: rtc?.upV ?? null,
+      darkSince: this.videoDarkSince,
+      attempts: this.videoHealAttempts,
+      now: Date.now(),
+    })
+    const recovered = this.videoDarkSince !== null && step.darkSince === null
+    this.videoDarkSince = step.darkSince
+    this.videoHealAttempts = step.attempts
+    // Clear only the notice this watchdog wrote — a codec fallback's own note
+    // is still true and must survive.
+    if (recovered && this.note === DARK_NOTE) this.note = null
+    if (step.action === 'none') return
+    this.healing = true
+    try {
+      if (step.action === 'recycle') {
+        this.log.warn('camera has published nothing for a while — turning it off and on')
+        await this.setCam(false).catch(() => {})
+        await this.setCam(true).catch(() => {})
+      } else if (step.action === 'rejoin') {
+        this.log.warn('camera still silent — rejoining the call on a fresh connection')
+        await this.#rejoinWithCodecs().catch(() => false)
+      } else {
+        this.log.error('camera is publishing nothing — nobody in the call can see this bot')
+        this.note = DARK_NOTE
+      }
+    } finally {
+      this.healing = false
+      // Each attempt gets a full window to prove itself, measured from when it
+      // FINISHED rather than when it started — a rejoin alone takes about ten
+      // seconds, and judging it on the two that were left would be no test.
+      if (this.videoDarkSince !== null) this.videoDarkSince = Date.now()
+    }
+  }
+
+  // Settling is not surviving. A codec can be on the wire for a single
+  // keyframe and then stall: the stream row lives on, its cumulative bytes
+  // live on, and what stops is FRAMES — so a burst reads exactly like a
+  // working stream to anything that only asks "did bytes move". Chrome's HEVC
+  // send path is that shape: one keyframe, then zero frames for the rest of
+  // the call while the SFU begs for another. Ask again a few seconds later,
+  // and ask the encoder whether it is still producing.
+  async #codecHolds(role, wanted, waitMs = 4000) {
+    await this.page.waitForTimeout(waitMs).catch(() => {})
+    const snap = await this.rtcSnapshot()
+    const mine = (snap?.outbound ?? []).filter(
+      (stream) => roleStream(role)(stream) && (stream.kbps ?? 0) > 0,
+    )
+    if (mine.length === 0) return false
+    // Audio has no frame rate, and a RED wrap never names itself in stats —
+    // settling already established the codec there, so sustain is the whole
+    // remaining question.
+    if (role === 'audio') return true
+    return (
+      mine.every((stream) => (stream.codec?.name ?? '').toLowerCase() === wanted) &&
+      mine.some((stream) => (stream.fps ?? 0) > 0)
+    )
+  }
+
+  // Only roles with a live publication to judge. A camera that was never
+  // turned on has nothing to prove yet; setCam proves it when it comes on.
+  async #proveLaunchCodecs() {
+    for (const role of ['video', 'audio']) {
+      const wanted = this.codecs[role]
+      if (!wanted) continue
+      const device = role === 'video' ? this.camState() : this.micState()
+      const on = await device.catch(() => 'unknown')
+      if (on !== 'on') {
+        // Nothing is publishing for this role, so there is nothing to judge —
+        // setCam/setScreen prove it whenever the device does come on.
+        this.log.info(`${wanted} unproven: the ${ROLE_WORD[role]} is ${on}`)
+        continue
+      }
+      await this.#proveCodec(role)
+    }
   }
 
   // Re-assert the stored preferences inside the page, skipping what the page
@@ -401,6 +670,7 @@ export class Guest {
     // swap, and the SFU consents to the codec in the process.
     if (on && state === 'on' && this.codecs.screen) {
       await this.#lkSwitch('screen', this.codecs.screen).catch(() => {})
+      if (this.monitorInstall) await this.#proveCodec('screen').catch(() => {})
     }
     return state
   }

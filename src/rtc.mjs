@@ -56,6 +56,14 @@ function pageSummary() {
     via: Boolean(m.viaTransport),
     down: r1(m.down),
     up: r1(m.up),
+    // Outbound VIDEO alone. The total rate cannot answer "is this bot's camera
+    // reaching anyone" — a wedged encoder still leaves audio flowing, so `up`
+    // stays healthy-looking at roughly the bitrate of speech.
+    upV: r1(
+      (m.outbound || [])
+        .filter((s) => s.kind === 'video')
+        .reduce((sum, s) => sum + (s.kbps ?? 0), 0),
+    ),
     rtt: r1(m.rtt),
     loss: r1(m.loss),
     jit: r1(m.jitter),

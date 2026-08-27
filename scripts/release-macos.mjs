@@ -180,7 +180,7 @@ try {
   }
 
   step('running tests')
-  for (const script of ['test:platforms', 'test:ui', 'test:stop']) {
+  for (const script of ['test:guest', 'test:platforms', 'test:ui', 'test:stop']) {
     run('npm', ['run', script])
   }
 

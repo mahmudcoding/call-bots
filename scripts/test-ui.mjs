@@ -80,6 +80,9 @@ const roster = (states, sizes = [states.length]) => {
       cam: guestState === 'in-call' ? 'on' : null,
       screen: guestState === 'in-call' ? 'off' : null,
       codecs: { audio: null, video: null, screen: guestState === 'in-call' ? 'vp8' : null },
+      // Bot 2 was sent on a codec that turned out to carry nothing; the server
+      // put it back on the platform's own and says so.
+      note: i === 1 ? "h265 sent nothing from the camera — back on the call's own codec" : null,
       rtc: guestState === 'in-call'
         ? { pcs: 1, via: false, down: 1830, up: 940, rtt: 45, loss: 0.2, jit: 9, in: { a: 1, v: 2 }, out: { a: 1, v: 1 }, limit: null }
         : null,
@@ -219,7 +222,7 @@ try {
   check('no Stop button before a session', !(await stopBtn.isVisible()))
   check('the header shows the machine: CPU, RAM, network',
     (await page.locator('#sysCpu').textContent()) === 'CPU 34%' &&
-      (await page.locator('#sysMem').textContent()) === 'RAM 10.0 GB' &&
+      (await page.locator('#sysMem').textContent()) === 'RAM 10.0 GB · 6.0 GB free' &&
       (await page.locator('#sysNet').textContent()) === '↓ 2.1 Mbps ↑ 4.3 Mbps',
     JSON.stringify(await page.locator('#sysCpu, #sysMem, #sysNet').allTextContents()))
   await push(state('idle', null, { system: { cpu: 97, mem: null, net: null } }))
@@ -235,12 +238,60 @@ try {
   check('no all-bots bar', !(await page.locator('#allbar').isVisible()))
   await page.locator('#link').fill('https://aloqa.test/join/AbCdEfGhIjKlMnOpQrSt')
   await page.locator('#botLabel').fill('  Mahmud  ')
+  check('the send codecs stay out of the way until asked for',
+    !(await page.locator('#joinCodecs').isVisible()))
+  // The bar aligns its groups to flex-end, so a shared row is a shared BOTTOM
+  // edge — tops differ by however tall each group is.
+  const barRows = () =>
+    page.locator('.bar').evaluate((bar) => {
+      const rows = new Set()
+      for (const child of bar.children) {
+        const box = child.getBoundingClientRect()
+        if (box.width === 0 && box.height === 0) continue // hidden: not on any row
+        rows.add(Math.round(box.bottom))
+      }
+      return rows.size
+    })
+  check('the bar is a single row without them', (await barRows()) === 1, `rows: ${await barRows()}`)
+  await page.locator('#codecToggle').click()
+  check('the Codecs trigger shows them beside the device toggles',
+    await page.locator('.bar [data-join-codec="video"]').isVisible() &&
+      await page.locator('.bar [data-join-codec="screen"]').isVisible())
+  check('each picker is captioned above it, like every other group in the bar',
+    await page.locator('.bar .jcodecs').evaluate((box) => {
+      const caps = [...box.querySelectorAll('.lbl')]
+      return caps.length === 2 &&
+        caps.every((cap) => {
+          const picker = cap.parentElement.querySelector('.codec')
+          return cap.getBoundingClientRect().bottom <= picker.getBoundingClientRect().top
+        })
+    }))
+  await page.locator('[data-join-codec="video"]').click()
+  const joinRows = await page.locator('.cmenu .crow').evaluateAll(
+    (rows) => rows.map((row) => row.textContent.replace('✓', '').trim()),
+  )
+  check('the launch picker leads with the way back to the platform\'s own pick',
+    joinRows[0] === 'Auto' && joinRows.includes('VP9'), JSON.stringify(joinRows))
+  await page.locator('.cmenu .crow', { hasText: 'VP9' }).click()
+  check('the picker shows what the next send will carry, marked as a pin',
+    (await page.locator('[data-join-codec="video"]').textContent()) === 'VP9' &&
+      (await page.locator('[data-join-codec="video"].-forced').count()) === 1)
+  check('a role left alone stays on the platform’s own pick',
+    (await page.locator('[data-join-codec="screen"]').textContent()) === 'Auto' &&
+      (await page.locator('[data-join-codec="screen"].-forced').count()) === 0)
+  await page.locator('#codecToggle').click()
+  check('hidden again, but a pinned choice still shows on the trigger',
+    !(await page.locator('#joinCodecs').isVisible()) &&
+      (await page.locator('#codecToggle.-on').count()) === 1)
   const startRequest = page.waitForRequest(
     (request) => request.method() === 'POST' && request.url().endsWith('/api/start'),
   )
   await goBtn.click()
-  check('the label is sent when starting',
-    (await startRequest).postDataJSON().label === 'Mahmud')
+  const startBody = (await startRequest).postDataJSON()
+  check('the label is sent when starting', startBody.label === 'Mahmud')
+  check('the chosen codecs ride the send, untouched roles stay on the platform',
+    startBody.videoCodec === 'vp9' && startBody.screenCodec === null,
+    JSON.stringify({ video: startBody.videoCodec, screen: startBody.screenCodec }))
   await page.waitForFunction(() => !document.querySelector('#goBtn').disabled)
 
   console.log('\njoining — bots are landing, one is still in the lobby')
@@ -311,6 +362,18 @@ try {
     (await page.locator('.card[data-slug="bot-1"] .rtcpanel').textContent()).includes('Alice'))
   check('the encoder limitation is surfaced',
     await page.locator('.card[data-slug="bot-1"] .rwarn').isVisible())
+  check('a bot whose launch codec carried nothing says so on its card',
+    (await page.locator('.card[data-slug="bot-2"] [data-note]').textContent())
+      === "h265 sent nothing from the camera — back on the call's own codec" &&
+      !(await page.locator('.card[data-slug="bot-1"] [data-note]').isVisible()),
+    await page.locator('.card[data-slug="bot-2"] [data-note]').textContent())
+  const pathEl = page.locator('.card[data-slug="bot-1"] [data-rtc-path]')
+  check('the panel says which path ICE settled on',
+    (await pathEl.textContent()) === 'direct · LAN · UDP',
+    await pathEl.textContent())
+  check('the hover carries the monitor\'s own transport detail',
+    (await pathEl.getAttribute('title')) === 'local host (wifi) · remote srflx · DTLS connected',
+    await pathEl.getAttribute('title'))
 
   console.log('\ncodec controls')
   const codecBar = page.locator('.card[data-slug="bot-1"] [data-codec-bar]')

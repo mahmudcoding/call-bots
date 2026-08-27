@@ -93,7 +93,12 @@
     background: linear-gradient(180deg, rgba(255,255,255,.03), transparent 60%), var(--panel);
     border: 1px solid var(--line); border-radius: var(--r); padding: 18px 20px; margin-bottom: 20px;
   }
-  .bar .grow { flex: 1 1 380px; min-width: 260px; }
+  /* A wrapping flex line breaks on BASIS, before shrinking is considered, so
+     the link field's basis is what decides whether Send bots keeps its place
+     on the row. Kept small deliberately: the field still grows into whatever
+     is left over, so a wide window gives it plenty and a narrow one gives the
+     bar a single row instead of dropping the button onto a second. */
+  .bar .grow { flex: 1 1 240px; min-width: 210px; }
   .lbl {
     display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700;
     color: var(--muted); margin-bottom: 9px; letter-spacing: .9px; text-transform: uppercase;
@@ -107,8 +112,8 @@
   .bar input::placeholder { color: var(--faint); }
   .bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
   .bar input:disabled { opacity: .6; }
-  .bar .bot-label { width: 170px; flex: none; }
-  .bar .count { width: 110px; flex: none; }
+  .bar .bot-label { width: 150px; flex: none; }
+  .bar .count { width: 92px; flex: none; }
   .bar .devices { flex: none; }
   .toggles { display: flex; gap: 8px; }
   .tgl {
@@ -165,6 +170,20 @@
   .allbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
   .allbar .lead { font-size: 12px; font-weight: 650; color: var(--faint); text-transform: uppercase; letter-spacing: .4px; }
   .allbar .btn { height: 30px; padding: 0 11px; font-size: 12.5px; }
+
+  /* The codecs the NEXT send arrives with, standing with the devices they
+     belong to: what a bot joins with is one decision, and the camera it
+     arrives on is part of it. Out of the flow until asked for, so the bar
+     stays a single row — and sized to the toggles when it is asked for, so
+     the row is one weight of control rather than two. The trigger wears the
+     accent while something is pinned: a hidden choice must still be visible
+     from the outside. text-transform and letter-spacing are inherited back
+     because the UA stylesheet resets both on a button. */
+  .lnk { color: var(--faint); text-transform: inherit; letter-spacing: inherit; transition: color .15s; }
+  .lnk:hover { color: var(--muted); }
+  .lnk.-on { color: var(--accent-2); }
+  .jcodecs { display: flex; align-items: flex-end; gap: 14px; flex: none; }
+  .jcodecs .codec { height: 42px; min-width: 96px; padding: 0 26px 0 12px; font-size: 12.5px; }
 
   /* ---------- one group per send ---------- */
   .batch { margin-bottom: 22px; }
@@ -228,6 +247,10 @@
   .controls .gap { flex: 1; }
   .err { margin-top: 10px; color: var(--danger); font-size: 12px; display: none; }
   .card.has-error .err { display: block; }
+  /* In the call, but not doing what it was sent to do — a launch codec that
+     turned out to send nothing. Not an error: the bot works, on the call's own
+     codec instead. Amber, so it reads as "look at this", not "this is broken". */
+  .cnote { margin-top: 10px; color: var(--warn); font-size: 12px; }
 
   /* ---------- pinned bots ---------- */
   /* A pin is a view preference, not something the bot does, so its button
@@ -268,6 +291,12 @@
   }
   .allbar .ck { display: inline; margin: 0 0 0 6px; }
   .allbar .codec { min-width: 104px; }
+  /* The path ICE settled on. A relayed call and a direct one behave nothing
+     alike, and nothing else in the panel says which one a bot got. */
+  .rpath {
+    margin-bottom: 8px; text-align: right;
+    font-size: 11.5px; font-weight: 600; color: var(--text);
+  }
   .rtcpanel .lbl { margin: 10px 0 6px; }
   .srow {
     display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 4px; padding: 5px 8px;
@@ -313,7 +342,7 @@
   <div class="spacer"></div>
   <span id="sysNet" class="chip" hidden title="This computer's network throughput">↓ <b>–</b> ↑ <b>–</b></span>
   <span id="sysCpu" class="chip" hidden title="This computer's CPU load">CPU <b>–</b></span>
-  <span id="sysMem" class="chip" hidden title="This computer's memory">RAM <b>–</b></span>
+  <span id="sysMem" class="chip" hidden title="This computer's memory: in use, and what is still free for more bots">RAM <b>–</b> · <b>–</b> free</span>
   <button id="stopBtn" class="btn -danger" hidden>Stop</button>
 </header>
 
@@ -333,12 +362,28 @@
         <input type="number" id="count" min="1" max="50" value="2">
       </div>
       <div class="devices">
-        <div class="lbl">Join with</div>
+        <div class="lbl">Join with
+          <button type="button" id="codecToggle" class="lnk" aria-expanded="false"
+            title="Send codecs the bots arrive with">Codecs</button>
+        </div>
         <div class="toggles">
           <button type="button" id="camToggle" class="tgl -on" aria-pressed="true">
             <span class="pip"></span><span>Camera on</span></button>
           <button type="button" id="micToggle" class="tgl -on" aria-pressed="true">
             <span class="pip"></span><span>Mic on</span></button>
+        </div>
+      </div>
+
+      <div class="jcodecs" id="joinCodecs" hidden>
+        <div class="cgrp">
+          <div class="lbl">Cam</div>
+          <button type="button" class="codec" data-join-codec="video"
+            title="Camera send codec the bots arrive with">Auto</button>
+        </div>
+        <div class="cgrp">
+          <div class="lbl">Screen</div>
+          <button type="button" class="codec" data-join-codec="screen"
+            title="Screenshare send codec the bots arrive with">Auto</button>
         </div>
       </div>
       <button id="goBtn" class="btn -accent go">Send bots</button>
@@ -463,14 +508,14 @@ $('#goBtn').onclick = async () => {
   try {
     if (running) {
       const res = await post('/api/add', {
-        guests, label: botLabel, camera: S.camOn, mic: S.micOn,
+        guests, label: botLabel, camera: S.camOn, mic: S.micOn, ...joinCodecs(),
       })
       if (res.removed) toast('that batch was removed while it was still arriving', '-warn')
       else toast(`${res.added} bot(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
     } else {
       await post('/api/start', {
         link: $('#link').value.trim(), guests, label: botLabel,
-        camera: S.camOn, mic: S.micOn,
+        camera: S.camOn, mic: S.micOn, ...joinCodecs(),
       })
     }
   } catch (error) {
@@ -552,7 +597,9 @@ const openCodecMenu = (anchor, values, current, onPick) => {
     const on = value === current
     const row = el('button', `crow${on ? ' -on' : ''}`)
     row.type = 'button'
-    row.innerHTML = `<span class="tick">${on ? '✓' : ''}</span>${esc(value.toUpperCase())}`
+    // '' is a real choice — the platform's own pick — for a picker whose
+    // codec is not in effect yet. Named, since a blank row reads as broken.
+    row.innerHTML = `<span class="tick">${on ? '✓' : ''}</span>${esc(value ? value.toUpperCase() : 'Auto')}`
     row.onclick = () => {
       closeCodecMenu()
       if (!on) onPick(value)
@@ -623,6 +670,46 @@ for (const btn of document.querySelectorAll('[data-all-codec]')) {
       } finally {
         btn.disabled = false
       }
+    })
+  }
+}
+
+/* ---------- codecs the next send arrives with ---------- */
+// Same seam as the CLI's --video-codec / --screen-codec: the choice rides
+// /api/start and /api/add, so the bots negotiate it at the join instead of
+// being switched afterwards. Bots already in the call are untouched — those
+// are what the all-bots bar and the per-bot pickers are for.
+const JOIN_ROLES = ['video', 'screen']
+const joinCodecs = () =>
+  Object.fromEntries(
+    JOIN_ROLES.map((role) => [
+      `${role}Codec`,
+      $(`[data-join-codec="${role}"]`).dataset.value || null,
+    ]),
+  )
+const joinBox = $('#joinCodecs')
+const joinToggle = $('#codecToggle')
+// Shown, or holding a choice while hidden: either way the trigger says so.
+const syncJoinToggle = () => {
+  const pinned = Object.values(joinCodecs()).some(Boolean)
+  joinToggle.classList.toggle('-on', pinned || !joinBox.hidden)
+}
+joinToggle.onclick = () => {
+  joinBox.hidden = !joinBox.hidden
+  joinToggle.setAttribute('aria-expanded', String(!joinBox.hidden))
+  syncJoinToggle()
+}
+for (const btn of document.querySelectorAll('[data-join-codec]')) {
+  const role = btn.dataset.joinCodec
+  btn.dataset.value = ''
+  btn.onclick = () => {
+    // Auto leads: a bot that has not been sent yet has no codec in use to
+    // fall back to reading, so the way back has to be on the list.
+    openCodecMenu(btn, ['', ...CODEC_LISTS[role]], btn.dataset.value, (codec) => {
+      btn.dataset.value = codec
+      btn.textContent = codec ? codec.toUpperCase() : 'Auto'
+      btn.classList.toggle('-forced', Boolean(codec))
+      syncJoinToggle()
     })
   }
 }
@@ -748,9 +835,11 @@ const buildCard = (guest) => {
         <span>RTT <b data-rtc="rtt">–</b></span>
       </div>
       <div class="rtcpanel" data-rtc-panel>
+        <div class="rpath" data-rtc-path hidden></div>
         <div class="codecbar" data-codec-bar hidden></div>
         <div data-rtc-dyn></div>
       </div>
+      <div class="cnote" data-note hidden></div>
       <div class="err"></div>
     </div>`
   for (const btn of card.querySelectorAll('[data-act]')) {
@@ -808,6 +897,9 @@ const updateCard = (guest, grid) => {
   pill.className = `pill -${base}`
   card.classList.toggle('has-error', Boolean(guest.lastError) && failed)
   $('.err', card).textContent = guest.lastError ?? ''
+  const note = $('[data-note]', card)
+  note.hidden = !guest.note
+  note.textContent = guest.note ?? ''
 
   const inCall = guest.state === 'in-call'
   const mic = $('[data-act=mic]', card)
@@ -885,7 +977,11 @@ const renderSystem = (system) => {
   memChip.hidden = !(mem?.total > 0 && mem?.avail != null)
   if (!memChip.hidden) {
     const used = Math.max(0, mem.total - mem.avail)
-    memChip.querySelector('b').textContent = `${(used / 1024 ** 3).toFixed(1)} GB`
+    // What is free is the headroom for more bots — the number this header
+    // exists to keep in view — so it is shown, not left to be worked out.
+    const [usedEl, freeEl] = memChip.querySelectorAll('b')
+    usedEl.textContent = `${(used / 1024 ** 3).toFixed(1)} GB`
+    freeEl.textContent = `${(mem.avail / 1024 ** 3).toFixed(1)} GB`
     chipTone(memChip, (used / mem.total) * 100)
   }
   const net = system?.net ?? null
@@ -947,6 +1043,7 @@ const toggleRtc = (slug, card) => {
     // options) for the next open, it just goes back into hiding.
     $('[data-rtc-dyn]', card).innerHTML = ''
     $('[data-codec-bar]', card).hidden = true
+    $('[data-rtc-path]', card).hidden = true
   }
 }
 
@@ -1094,15 +1191,43 @@ const setBotCodec = async (slug, role, codec, btn) => {
   }
 }
 
+// How the media actually gets out, worded as the monitor itself words it (see
+// src/vendor/rtc-stream-monitor.js): the local candidate type is the whole
+// story — a relay means every packet is taking a detour through a TURN server.
+const PATH_WORD = { relay: 'via TURN relay', host: 'direct · LAN' }
+const connPath = (d) => {
+  const local = d?.localCand
+  if (!local?.type) return null
+  const via = PATH_WORD[local.type] ?? 'direct · STUN'
+  return {
+    text: local.proto ? `${via} · ${String(local.proto).toUpperCase()}` : via,
+    // The monitor's own transport line, kept for the hover: the candidate
+    // types on both ends, the network behind the local one, and DTLS.
+    detail: [
+      `local ${local.type}${local.net ? ` (${local.net})` : ''}`,
+      d.remoteCand?.type ? `remote ${d.remoteCand.type}` : null,
+      d.dtls ? `DTLS ${d.dtls}` : null,
+    ].filter(Boolean).join(' · '),
+  }
+}
+
 const renderRtcPanel = (guest, card) => {
   const dyn = $('[data-rtc-dyn]', card)
+  const pathEl = $('[data-rtc-path]', card)
   if (guest.state !== 'in-call') {
     $('[data-codec-bar]', card).hidden = true
+    pathEl.hidden = true
     dyn.innerHTML = '<div class="rmsg">waiting for the call…</div>'
     return
   }
   const entry = rtcEntry(guest.slug)
   const d = entry.snap
+  const path = connPath(d)
+  pathEl.hidden = !path
+  if (path) {
+    pathEl.textContent = path.text
+    pathEl.title = path.detail
+  }
   updateCodecBar(guest, card, d?.caps ?? null, liveCodecs(d), d?.negotiated ?? null)
   // The compact bar on the card already carries rates and RTT; the panel is
   // codecs and streams only.
