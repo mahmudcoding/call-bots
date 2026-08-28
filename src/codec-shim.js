@@ -203,13 +203,24 @@
   window.RTCPeerConnection = Wrapped
   if ('webkitRTCPeerConnection' in window) window.webkitRTCPeerConnection = Wrapped
 
-  const owners = (role) =>
-    [...pcs].filter((pc) => {
+  // The one place the registry loses closed connections, so every walker
+  // below sees the same live set and none can drift on what "dead" means.
+  const livePcs = () => {
+    const live = []
+    for (const pc of [...pcs]) {
       try {
-        if (pc.connectionState === 'closed' || pc.signalingState === 'closed') {
-          pcs.delete(pc)
-          return false
-        }
+        if (pc.connectionState === 'closed' || pc.signalingState === 'closed') pcs.delete(pc)
+        else live.push(pc)
+      } catch {
+        pcs.delete(pc)
+      }
+    }
+    return live
+  }
+
+  const owners = (role) =>
+    livePcs().filter((pc) => {
+      try {
         return pc.getTransceivers().some((t) => !t.stopped && roleOf(t) === role)
       } catch {
         return false
@@ -369,13 +380,124 @@
     return lkRoom
   }
 
-  window.__botLkSwitch__ = async (role, name) => {
+  // A constraint dimension is a bare number or {ideal|exact|max}.
+  const wantDim = (value) =>
+    typeof value === 'number' ? value : value?.ideal ?? value?.exact ?? value?.max ?? null
+
+  // A publish computes its simulcast ladder from the track's dimensions AT
+  // THAT MOMENT (livekit-client: waitForDimensions → computeVideoEncodings),
+  // and under CPU pressure Chrome adapts the capture itself — so a switch made
+  // in a degraded moment bakes the trough into the new publication for good: a
+  // camera that had sunk to 320x180 republishes as a single 320x180 layer with
+  // a full-bitrate budget and no ladder to climb back up. Put the capture back
+  // to its constrained size first; restartTrack() re-acquires the device at
+  // the track's own creation constraints, which is the size the ladder is
+  // meant to be built from.
+  const restoreCapture = async (track) => {
+    const constraints = track.constraints ?? {}
+    const wantW = wantDim(constraints.width)
+    const wantH = wantDim(constraints.height)
+    const now = track.mediaStreamTrack?.getSettings?.() ?? {}
+    const degraded =
+      (wantW !== null && typeof now.width === 'number' && now.width < wantW) ||
+      (wantH !== null && typeof now.height === 'number' && now.height < wantH)
+    if (!degraded || typeof track.restartTrack !== 'function') return false
+    await track.restartTrack()
+    return true
+  }
+
+  // Senders the client still accounts for: every publication's own, the
+  // backup-codec senders multi-codec simulcast parks beside it in
+  // track.simulcastCodecs (a VP9 camera with an H264 backup is two active
+  // tracks BY DESIGN, not a duplicate), and anything a publish in flight has
+  // created but not yet registered.
+  const ownedSenders = (participant) => {
+    const owned = new Set()
+    const note = (sender) => sender && owned.add(sender)
+    for (const pub of participant.trackPublications?.values?.() ?? []) {
+      note(pub.track?.sender)
+      for (const sc of pub.track?.simulcastCodecs?.values?.() ?? []) note(sc.sender)
+    }
+    for (const pending of participant.pendingPublishPromises?.keys?.() ?? []) note(pending.sender)
+    return owned
+  }
+
+  // The unpublish/republish cycle leaks: every publish adds a transceiver and
+  // unpublish only turns the old one 'inactive', so switches pile dead 0 kbps
+  // rows onto the connection — and when a publish half-fails, the abandoned
+  // sender still holds the live track and KEEPS ENCODING, doubling the bot's
+  // outbound. Both shapes were measured on prod (ALK-3724: two full ladders at
+  // once; 15 accumulated video tracks). After each switch, stop what no
+  // publication owns. Only transceivers a completed negotiation has touched:
+  // currentDirection is null exactly while an app-driven publish is between
+  // creating its sender and its first answer, and that sender must survive.
+  // The connections that carry the client's own senders — LiveKit keeps every
+  // local publication on one publisher pc. The sweep must stay inside these:
+  // the SUBSCRIBER connection's inactive m-lines belong to the server's mid
+  // plan (a remote participant unpublished), and stopping one client-side
+  // would permanently reject the slot the next remote track arrives on.
+  const publisherPcs = (owned) =>
+    livePcs().filter((pc) => {
+      try {
+        return pc.getTransceivers().some((transceiver) => owned.has(transceiver.sender))
+      } catch {
+        return false
+      }
+    })
+
+  // Returns {dead, live}: dead is the routine kind — the transceiver this
+  // switch's own unpublish parked — while live is the incident kind, a sender
+  // that was STILL ENCODING with no publication behind it.
+  const sweepStrays = (participant, kind, within) => {
+    const owned = ownedSenders(participant)
+    const swept = { dead: 0, live: 0 }
+    for (const pc of within) {
+      try {
+        for (const transceiver of pc.getTransceivers()) {
+          if (transceiver.stopped || transceiver.currentDirection === null) continue
+          if (owned.has(transceiver.sender)) continue
+          const track = transceiver.sender?.track
+          const encoding = track && track.readyState === 'live' && track.kind === kind
+          if (encoding) {
+            // Still encoding with nothing behind it: detach now — stop()
+            // alone leaves the encoder running until a negotiation lands.
+            try {
+              transceiver.sender.replaceTrack(null)
+            } catch {
+              // Detaching is best-effort; stop() below still ends it.
+            }
+          } else if (track || transceiver.direction !== 'inactive') {
+            // Not a dead unpublish leftover: a receiver, a muted-but-owned
+            // sender, another kind's stray. Not ours to touch.
+            continue
+          }
+          try {
+            transceiver.stop()
+            if (encoding) swept.live += 1
+            else swept.dead += 1
+          } catch {
+            // A transceiver that cannot stop is left for the next sweep.
+          }
+        }
+      } catch {
+        // A connection torn down mid-walk has nothing left to sweep.
+      }
+    }
+    return swept
+  }
+
+  const lkSwitchNow = async (role, name) => {
     const room = findRoom()
     if (!room) return { ok: false, reason: 'no-room' }
+    const participant = room.localParticipant
     const source = role === 'audio' ? 'microphone' : role === 'screen' ? 'screen_share' : 'camera'
-    const pub = [...(room.localParticipant.trackPublications?.values?.() ?? [])].find(
+    const kind = role === 'audio' ? 'audio' : 'video'
+    // EVERY publication of the source, not the first: a duplicate left by an
+    // earlier mishap must go out with this switch, not survive beside it.
+    const pubs = [...(participant.trackPublications?.values?.() ?? [])].filter(
       (p) => p.source === source && p.track,
     )
+    const pub = pubs.find((p) => p.track.mediaStreamTrack?.readyState === 'live') ?? pubs[0]
     if (!pub) return { ok: false, reason: 'no-publication' }
     const track = pub.track
     const opts = { source }
@@ -390,19 +512,64 @@
       opts.videoCodec = name ?? room.options?.publishDefaults?.videoCodec ?? undefined
       if (!opts.videoCodec) delete opts.videoCodec
     }
+    let restored = false
+    let restoreError = null
+    const swept = { dead: 0, live: 0 }
+    // Resolved before the unpublish empties the source's sender set — after
+    // it, a camera-only bot would briefly own no sender at all and the
+    // publisher connection would be unfindable.
+    const within = publisherPcs(ownedSenders(participant))
+    const sweep = () => {
+      const found = sweepStrays(participant, kind, within)
+      swept.dead += found.dead
+      swept.live += found.live
+    }
     try {
-      await room.localParticipant.unpublishTrack(track, false)
+      for (const p of pubs) await participant.unpublishTrack(p.track, false)
       await new Promise((resolve) => setTimeout(resolve, 400))
-      await room.localParticipant.publishTrack(track, opts)
-      return { ok: true }
+      // The screen track is a synthetic canvas at a fixed size — only the
+      // camera degrades and only the camera is restored. A restore that
+      // throws has already stopped the old capture (livekit-client stops it
+      // before re-acquiring), so the republish below goes out with a dead
+      // track and the bot is dark until the watchdog recycles it — say so
+      // rather than leaving that to be rediscovered from the outside.
+      if (role === 'video') {
+        restored = await restoreCapture(track).catch((error) => {
+          restoreError = String(error?.message ?? error)
+          return false
+        })
+      }
+      // Sweep BEFORE the republish: stop() only marks a transceiver, and it is
+      // the next negotiation that reaps the m-line and its stats rows — the
+      // publish below is that negotiation. Swept after instead, the dead rows
+      // would sit in every panel until some later switch renegotiates.
+      sweep()
+      await participant.publishTrack(track, opts)
+      // Again for anything the publish itself abandoned (a half-failed retry);
+      // detaching stops its encoder now, the next negotiation clears its row.
+      sweep()
+      return { ok: true, restored, restoreError, swept }
     } catch (error) {
       // Never leave the bot unpublished: put the track back on defaults.
       try {
-        await room.localParticipant.publishTrack(track, { source })
+        await participant.publishTrack(track, { source })
       } catch {
         // The app's own recovery is the last resort.
       }
-      return { ok: false, reason: String(error) }
+      sweep()
+      return { ok: false, reason: String(error), restored, restoreError, swept }
     }
+  }
+
+  // One switch at a time. Interleaved republishes are how duplicates are born:
+  // publishTrack overwrites track.sender, so the loser's sender can never be
+  // unpublished by anyone — it encodes until the connection dies. The chain
+  // holds every entry point (a panel pick, the launch republish, a heal's
+  // camera recycle) to strict turns, and a failed turn must not fail the next.
+  let lkTurn = Promise.resolve()
+  window.__botLkSwitch__ = (role, name) => {
+    const turn = lkTurn.then(() => lkSwitchNow(role, name))
+    lkTurn = turn.catch(() => {})
+    return turn
   }
 })()

@@ -86,9 +86,15 @@ replace the camera clips. Sources and licences are in
   negotiation the call takes part in — anything else would black the bot out
   for every other participant. On Aloqa the bot republishes its track the
   LiveKit way, so a switch lands in a second or two; other platforms
-  renegotiate, and failing that the bot briefly rejoins. The stream rows show
-  what was really negotiated. H264/H265 availability depends on the browser
-  the bots run in.
+  renegotiate, and failing that the bot briefly rejoins. A switch leaves
+  nothing behind it: the sender the old publication used is stopped rather
+  than left to encode a second copy of the picture, so switching all day does
+  not end with a bot publishing two ladders at twice the bitrate. And a
+  switch made while the picture has sunk under CPU load puts the capture back
+  to full size first — republishing as-is would fix the new track's ceiling
+  at whatever frame it caught, with no way back up — so a bot switched at a
+  bad moment still climbs to full HD. The stream rows show what was really
+  negotiated. H264/H265 availability depends on the browser the bots run in.
 - **A Mac app**, if you would rather not use a terminal: `npm run build:app`
   builds a versioned ZIP in `dist/` (Apple Silicon). Version `0.3.0` must be
   installed manually once and opened with right-click → Open because it is

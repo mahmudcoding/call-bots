@@ -350,14 +350,31 @@ export class Guest {
     return res.negotiated === false ? 'unavailable' : 'requested'
   }
 
-  #lkSwitch(role, codec) {
-    if (!this.page || this.page.isClosed()) return Promise.resolve({ ok: false, reason: 'no-page' })
-    return this.page
+  async #lkSwitch(role, codec) {
+    if (!this.page || this.page.isClosed()) return { ok: false, reason: 'no-page' }
+    const result = await this.page
       .evaluate(
         (arg) => window.__botLkSwitch__?.(arg.role, arg.codec) ?? { ok: false, reason: 'no-shim' },
         { role, codec },
       )
       .catch(() => ({ ok: false, reason: 'evaluate' }))
+    // The switch reports its own repairs; the notable ones belong in the
+    // bot's log rather than swallowed with the result. Dead leftovers swept
+    // are routine — every switch parks one — and stay quiet; a LIVE stray is
+    // the double-ladder incident and is worth a warning. A restored capture
+    // explains a resolution jump the panel would otherwise show unprompted.
+    if (result.restored) {
+      this.log.info('camera capture had degraded — restored to full size before republishing')
+    }
+    if (result.restoreError) {
+      this.log.warn(`could not restore the degraded camera capture: ${result.restoreError}`)
+    }
+    if (result.swept?.live > 0) {
+      this.log.warn(
+        `stopped ${result.swept.live} stray sender(s) that were still encoding — a duplicate ladder was forming`,
+      )
+    }
+    return result
   }
 
   // Leave and come straight back with the CURRENT preferences seeded at
