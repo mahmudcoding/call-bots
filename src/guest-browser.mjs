@@ -3,8 +3,13 @@
 // Meet refuses anonymous joins from a browser with a debugger attached — same
 // window, same meeting, same minute: readable through AppleScript, refused
 // through CDP. So a guest gets no Playwright and no --remote-debugging-port. It
-// is a real incognito window, scripted through Chrome's own `execute
-// javascript`, which Meet cannot tell from the page's own code.
+// is a real, ordinary window on a throwaway profile, scripted through Chrome's
+// own `execute javascript`, which Meet cannot tell from the page's own code.
+//
+// Not incognito, though it started that way: an incognito window refuses to
+// inherit the camera and microphone grant seeded into the profile, and Meet
+// then has nothing to offer but "Continue without microphone and camera". A
+// fresh profile is already signed out, which is all a guest actually needs.
 //
 // Apple Events reach only ONE process per bundle id, and which one is not
 // stable, so the bots cannot share the name "Google Chrome" with the user's
@@ -128,6 +133,7 @@ const startShared = async (media, options) => {
       '--mute-audio',
       '--autoplay-policy=no-user-gesture-required',
       '--use-fake-device-for-media-stream',
+      // Process-wide, so every guest in a run shares this clip and this voice.
       ...(media && !options.noVideo ? [`--use-file-for-fake-video-capture=${media.video}`] : []),
       ...(media && !options.noAudio ? [`--use-file-for-fake-audio-capture=${media.audio}`] : []),
       `${RUN_MARKER}=${options.runId}`,
@@ -213,7 +219,11 @@ export class GuestWindow {
     shared.spare = null
     if (!windowId) {
       const before = new Set(await windowIds())
-      await speak('make new window with properties {mode:"incognito"}')
+      // A normal window, deliberately. The profile is a throwaway that is
+      // already signed out, and an incognito window would not inherit the
+      // camera and microphone grant seeded into it — leaving Meet with nothing
+      // to offer but "Continue without microphone and camera".
+      await speak('make new window')
       const deadline = Date.now() + 20_000
       while (Date.now() < deadline && !windowId) {
         windowId = (await windowIds()).find((id) => !before.has(id)) ?? null
