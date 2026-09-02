@@ -219,13 +219,19 @@ const registerBundle = async () => {
 // Window ids run past 2^30, and AppleScript turns a literal that big into a
 // real — "whose id is 1439954207" goes looking for 1.439954207E+9 and fails
 // with "Invalid index". Comparing as text sidesteps the conversion entirely.
+// By id, as an object specifier Chrome resolves when each line runs. This
+// used to walk `windows` and keep the loop variable — a reference by
+// position — and Chrome orders windows front-to-back, so a window made or
+// raised between the walk and the use moved every position along: one
+// guest's navigation landed in another's window, and a failed guest closed
+// a window that was never its own.
 const onWindow = (windowId, body) =>
   [
-    'set _w to missing value',
-    'repeat with _c in windows',
-    `  if ((id of _c) as text) is ${quote(String(windowId))} then set _w to _c`,
-    'end repeat',
-    'if _w is missing value then error "this Meet guest window is gone"',
+    'try',
+    `  set _w to window id ${String(windowId)}`,
+    'on error',
+    '  error "this Meet guest window is gone"',
+    'end try',
     'set _t to active tab of _w',
     body,
   ].join('\n')
@@ -469,6 +475,15 @@ const stop = async (child, userDataDir) => {
   while (Date.now() < gone && (await browserRunning())) {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
+  // Still here after a polite ask — a throwaway profile has nothing to save.
+  if (await browserRunning()) {
+    try {
+      process.kill(-child.pid, 'SIGKILL')
+    } catch {
+      // Gone between the check and the kill.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
   // Chrome keeps unlinking its own files for several seconds after the kill,
   // and a removal that lands inside that window loses — measured as one
   // profile left behind per run at 2.5 s of retries. Keep trying for a while,
@@ -533,8 +548,8 @@ const killOnExit = () => {
 // state request and the health tick both want a summary; two reads a few
 // milliseconds apart would make the later one a rate over no time at all.
 const FRESH_MS = 1500
-// How long a closing browser gets to exit before its teardown stops waiting.
-const EXIT_WAIT = 5000
+// How long a closing browser gets to exit on its own before it is killed.
+const EXIT_WAIT = 8000
 // The gap between a window's first two reads, which together make its first
 // real rate. Longer than a refresh of webrtc-internals, or the pair could
 // straddle none and report a bot sending nothing.
@@ -832,11 +847,16 @@ export class GuestWindow {
         await this.waitForTimeout(250)
         const current = await this.url().catch(() => '')
         if (current.startsWith(wanted)) {
-          // `set URL` returns as soon as the navigation is asked for.
+          // `set URL` returns as soon as the navigation is asked for, and the
+          // tab reports the new address while the old document is still the
+          // one answering — so what is asked is where the document itself
+          // says it is.
+          const host = new URL(wanted).host
           const deadline = Date.now() + 45_000
           while (Date.now() < deadline) {
-            const state = await this.evaluate('document.readyState').catch(() => null)
-            if (state === 'interactive' || state === 'complete') return
+            const seen = await this.evaluate('location.host+" "+document.readyState').catch(() => null)
+            const [where, state] = String(seen ?? '').split(' ')
+            if (where === host && (state === 'interactive' || state === 'complete')) return
             await this.waitForTimeout(250)
           }
           return

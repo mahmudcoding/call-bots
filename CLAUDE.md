@@ -172,8 +172,20 @@ Clicking is plain `element.click()`.
 - **One Chrome process for all guests**, because of the Apple Events limit — and
   `--use-file-for-fake-*` is process-wide, so every guest in a run shares one
   camera clip and one voice. Aloqa bots and Meet account bots still get one
-  apiece. One incognito window per guest; Meet counts each as its own
-  participant (three hand-opened windows joined one meeting as three guests).
+  apiece. One window per guest; Meet counts each as its own participant (three
+  hand-opened windows joined one meeting as three guests). Every way around
+  this was tried on 2026-09-03 and failed; see "Why a guest cannot have its own
+  camera" below before trying again.
+- **About three guests on an 8-core M3 with 16 GB.** Each is a Chrome window
+  encoding AV1 and decoding everyone else. Three sat at a load average of 9;
+  a fourth took it to 48, Apple Events took seconds each, every probe timed
+  out and the dashboard went blank. `machineProfile().meetMax` is
+  `cores / 2.5` and the orchestrator warns past it. Two things bought
+  headroom: the guest windows are 640×440 and tiled — Meet requests video
+  sized to the tiles it draws, and remote video dropped from ~3 Mbps to
+  ~250 kbps per guest — and the Meet camera clip is capped at 1280 wide
+  (`withMeetClip`), since Meet sends at most 720p and a 1080p clip was decoded
+  and scaled for nothing.
 - **Visible windows**, N of them.
 - **Permission prompts the first time.** One Automation prompt — the app asking
   to control the *Call Bots browser* — because driving Chrome without a debugger
@@ -210,6 +222,59 @@ Note `open -na "Google Chrome" --args ...` does **not** start a process — it
 adds a tab to the existing incognito window and drops the `--args`. Only
 spawning the binary directly makes a new process.
 
+### Why a guest cannot have its own camera (measured 2026-09-03)
+
+Account bots each run their own Chrome, so the five clips and five voices
+cycle through them as they do through Aloqa bots. Guests share one process
+and one fake device. Four ways to give each guest its own were measured
+against the live meeting; none works, and each took an evening's hour.
+
+- **One process per guest, addressed by pid.** JavaScript for Automation
+  accepts `Application(<pid>)`, and with two processes of the bots' bundle
+  it answered *both* pids from the same process — sequentially, concurrently,
+  and by window id, every call landed in the first process launched. Both
+  processes number their windows identically (`windows[0].id()` was the same
+  in each), so a misrouted event even finds a matching window: bot-1's mute
+  muted bot-2, bot-2 never had stats. Apple Events resolve by bundle id, full
+  stop. A bundle per guest would work but costs one Automation prompt per
+  guest, forever.
+- **A bare DevTools client** — `--remote-debugging-port=0`, a hand-written
+  WebSocket client sending only `Page.navigate` and `Runtime.evaluate`, no
+  Playwright, no domain enabling — got "You can't join this video call" in
+  2.5 s. It is the open port Meet objects to, not what is sent over it.
+- **Media substituted in the page.** A canvas fed by the guest's MJPEG frames
+  and an audio graph playing its voice, served by the dashboard on
+  `127.0.0.1` (which needs `local_network_access` granted in the profile or
+  `--disable-features=LocalNetworkAccessChecks`: a Meet page fetching
+  loopback otherwise sits pending forever behind a permission prompt nobody
+  answers). The tracks were real and ready in every run. Meet never took
+  them: `getUserMedia` overridden on the instance and on
+  `MediaDevices.prototype`, `RTCPeerConnection` wrapped, `addTrack`,
+  `addTransceiver` and `replaceTrack` hooked, every iframe realm hooked at
+  insertion and again through the `contentWindow` getter — zero calls to any
+  of them, in any realm, while the call ran. Meet's media stack does not go
+  through the page's WebIDL surface at all.
+- **Hooks installed before Meet's bundle**, to rule out "too late": navigate
+  to `https://meet.google.com/robots.txt` (same origin, no scripts), install
+  the hooks, `fetch` the meeting page with the profile's cookies,
+  `history.replaceState` to the meeting URL, `document.open()` and write it
+  in — the Window survives, so the hooks do. This *works* as far as it goes,
+  and two things had to be learned for it: every meet.google.com response
+  carries `require-trusted-types-for 'script'`, so the HTML, the parser
+  (`DOMParser`) and each script go through a Trusted Types policy (any name
+  is accepted); and the script-src is a per-response nonce with
+  `'strict-dynamic'`, so the written page's own `<script>` tags are refused
+  and Meet stalls on "Getting ready…". Non-parser-inserted scripts are exempt
+  under `'strict-dynamic'`, so the runnable scripts are lifted out and
+  replayed as created elements in document order, each external one loaded
+  before the next, with `document.readyState` held at `loading` and
+  `DOMContentLoaded`/`load` dispatched at the end. Meet then boots fully —
+  name field, mic and camera controls, joins the call — with the hooks in
+  place from its first instruction. And still zero calls. That is the
+  measurement that closes the question.
+
+So guests share the run's clip and voice, and the README says so.
+
 ## Other Meet facts worth not rediscovering
 
 - **Presenting does not work.** `getDisplayMedia` hands Meet a live 1920x1080
@@ -230,6 +295,24 @@ spawning the binary directly makes a new process.
   renders. Remote tiles are the ones playing a `getReceivers()` track.
 - **Meet renders in the account's language**, which overrides `hl` in the link.
   The adapter reads English control labels, so a non-English account fails.
+- **Address windows by id, never by position.** `repeat with _c in windows`
+  hands back `item i of windows`, a reference by position, and Chrome orders
+  `windows` front-to-back — a window made or raised between the lookup and
+  the use moved every position along. That was every "mix-up" of 2026-09-02:
+  a guest navigating another's window, a guest's failure closing a window
+  that was never its own, two windows tagged for one bot. `window id N` is an
+  object specifier Chrome resolves when the line runs. Likewise take a new
+  window's id from the creation (`set _w to make new window` / `id of _w`):
+  diffing the window list before and after fails silently under load, when a
+  listing that errored read as an empty list.
+- **osascript stuck inside an Apple Event ignores SIGTERM.** Thirty of them
+  were alive at once under load, each holding a queue slot for 25 s.
+  `killSignal: 'SIGKILL'`, a 10 s timeout, and a queue that sends three at a
+  time and refuses what has waited longer than 6 s.
+- **webrtc-internals refreshes its tables about once a second, unevenly**
+  while its window is minimised: two reads 1.5 s apart can straddle no
+  refresh (a rate of zero) or two (double). Rates are taken over a six-second
+  window of samples, and the first read takes a 2.5 s baseline.
 - **Chrome holds a profile with a `SingletonLock` symlink** pointing at
   `<hostname>-<pid>`. That target is not a real path, so `existsSync()` follows
   it, finds nothing and reports no lock — it has to be read with `readlink`.
