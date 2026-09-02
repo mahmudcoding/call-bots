@@ -15,10 +15,16 @@ export const machineProfile = () => {
   const byMemory = Math.floor(memGB / 2.5)
   const byCores = Math.floor(cores * 0.75)
   const recommendedMax = Math.max(2, Math.min(byMemory, byCores))
+  // A Google Meet bot is a whole Chrome window encoding AV1 and decoding every
+  // other participant's video — two to three Aloqa bots' worth. Measured on an
+  // 8-core M3: three guests at a load average of 9, a fourth took it to 48 and
+  // the machine stopped answering.
+  const meetMax = Math.max(1, Math.min(Math.floor(cores / 2.5), Math.floor(memGB / 3)))
   return {
     memGB: Math.round(memGB),
     cores,
     recommendedMax,
+    meetMax,
     platform: `${os.platform()}/${os.arch()}`,
   }
 }
@@ -162,7 +168,15 @@ export const systemUsage = async () => {
   return systemCache.inFlight
 }
 
-export const concurrencyWarning = (count, profile = machineProfile()) => {
+export const concurrencyWarning = (count, profile = machineProfile(), { meet = false } = {}) => {
+  if (meet) {
+    if (count <= profile.meetMax) return null
+    return (
+      `${count} Google Meet bots — above about ${profile.meetMax} on this machine ` +
+      `(${profile.memGB} GB RAM, ${profile.cores} cores): each is a full Chrome window encoding ` +
+      `and decoding video, and past that point the machine stops keeping up with any of them.`
+    )
+  }
   if (count <= profile.recommendedMax) return null
   return (
     `${count} participants — above about ${profile.recommendedMax} publishing at once, ` +

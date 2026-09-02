@@ -41,8 +41,16 @@ const READY_TIMEOUT = 60_000
 
 const quote = (value) => `"${String(value).replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`
 
-const osascript = async (script, timeout = 25_000) => {
-  const { stdout } = await run('osascript', ['-e', script], { timeout, maxBuffer: 16 * 1024 * 1024 })
+// Ten seconds is long for one Apple Event and short enough that a browser too
+// busy to answer does not hold a queue slot for half a minute — and a kill
+// that means it: osascript stuck inside an Apple Event ignores SIGTERM, which
+// is how thirty of them came to be alive at once.
+const osascript = async (script, timeout = 10_000) => {
+  const { stdout } = await run('osascript', ['-e', script], {
+    timeout,
+    killSignal: 'SIGKILL',
+    maxBuffer: 16 * 1024 * 1024,
+  })
   return stdout.trimEnd()
 }
 
@@ -67,6 +75,11 @@ const PERMISSION_HELP =
 // app every one of those queries failed, every liveness answer was wrong, and
 // the whole guest path fell over while the same code ran clean from a shell.
 const browserRunning = async () => {
+  // Once started, the browser is this process's own child, and its exit is an
+  // event already delivered — no lookup needed, and none spawned per Apple
+  // Event. Before that, and while it is being stopped, ask the system.
+  const child = shared?.child
+  if (child) return child.exitCode === null && child.signalCode === null
   let out
   try {
     ;({ stdout: out } = await run('lsappinfo', ['find', `bundleid=${BUNDLE_ID}`], { timeout: 10_000 }))
@@ -99,14 +112,48 @@ const preflightPermissions = async () => {
   }
 }
 
+// Chrome answers Apple Events one at a time, so sending more at once only
+// queues them inside Chrome, where a caller that gave up waiting cannot take
+// its request back. Queue them here instead, a few at a time, and refuse
+// outright what has already waited longer than any caller would: with three
+// guests and a dashboard polling every second, that is how every probe stopped
+// timing out at once.
+const SPEAK_AT_ONCE = 3
+const SPEAK_QUEUE_MS = 6000
+let speaking = 0
+const speakQueue = []
+const nextSpeaker = () => {
+  while (speaking < SPEAK_AT_ONCE && speakQueue.length > 0) {
+    const { resolve, reject, queuedAt } = speakQueue.shift()
+    if (Date.now() - queuedAt > SPEAK_QUEUE_MS) {
+      reject(new Error('the Call Bots browser is busy'))
+      continue
+    }
+    speaking += 1
+    resolve()
+  }
+}
+const turnToSpeak = () =>
+  new Promise((resolve, reject) => {
+    speakQueue.push({ resolve, reject, queuedAt: Date.now() })
+    nextSpeaker()
+  })
+const doneSpeaking = () => {
+  speaking -= 1
+  nextSpeaker()
+}
+
 const speak = async (body) => {
   if (!(await browserRunning())) throw new Error('the Call Bots browser is not running')
+  await turnToSpeak()
   let out
   try {
     out = await osascript(tell(body))
   } catch (error) {
     if (NOT_PERMITTED.test(String(error.message))) throw new Error(PERMISSION_HELP)
     throw error
+  } finally {
+    doneSpeaking()
   }
   if (process.env.CALL_BOTS_DEBUG_MEET) {
     console.error('[speak]', body.split('\n').pop().slice(0, 44), '| procs after:', await processCount())
@@ -210,32 +257,64 @@ const createWindow = (work) => {
   return turn
 }
 
+// The id comes back from the creation itself. This used to list the windows
+// before and after making one and take the difference — and under load, a
+// listing that failed read as an empty list, so the "new" window was whichever
+// existing one came first: a guest was handed another guest's window, drove
+// it, and closed it on its way out.
 const newWindowId = async () => {
-  const before = new Set(await windowIds())
-  await speak('make new window')
-  const deadline = Date.now() + 20_000
-  while (Date.now() < deadline) {
-    const fresh = (await windowIds()).find((id) => !before.has(id))
-    if (fresh) return fresh
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-  throw new Error('the Call Bots browser did not open a window')
+  const id = await speak('set _w to make new window\nreturn (id of _w) as text')
+  if (!/^\d+$/u.test(id.trim())) throw new Error('the Call Bots browser did not open a window')
+  return id.trim()
+}
+
+// Guest windows are small and tiled, not left where Chrome drops them, one on
+// top of another at full size. Meet sizes what it asks the server for by the
+// tiles it draws, so a small window receives small video — the difference
+// between three guests and five on the same machine — and the desktop stays
+// legible with several of them open.
+const WINDOW_W = 640
+const WINDOW_H = 440
+const COLUMNS = 3
+const placeWindow = async (windowId, slot) => {
+  const col = slot % COLUMNS
+  const row = Math.floor(slot / COLUMNS) % 3
+  const x = col * WINDOW_W
+  const y = 40 + row * (WINDOW_H + 10)
+  await speak(onWindow(windowId, `set bounds of _w to {${x}, ${y}, ${x + WINDOW_W}, ${y + WINDOW_H}}`)).catch(
+    () => {},
+  )
 }
 
 const ensureStatsWindow = async () => {
   if (!shared) return null
   // Memoised while in flight: two guests opening at once must not each build
   // a stats window of their own.
-  shared.statsWindowPromise ??= createWindow(async () => {
+  // A failure is not memoised: one window that would not open must not cost
+  // the whole run its stats, so the next read tries again.
+  const mine = (shared.statsWindowPromise ??= createWindow(async () => {
     const windowId = await newWindowId()
     await speak(onWindow(windowId, `set URL of _t to ${quote(INTERNALS)}`))
     // Nobody needs to see it; it keeps polling while minimised.
     await speak(onWindow(windowId, 'set minimized of _w to true')).catch(() => {})
     if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] stats window', windowId)
     return windowId
-  }).catch(() => null)
-  shared.statsWindow = await shared.statsWindowPromise
+  }).catch((error) => {
+    if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] stats window failed:', error.message)
+    if (shared?.statsWindowPromise === mine) shared.statsWindowPromise = null
+    return null
+  }))
+  shared.statsWindow = await mine
   return shared.statsWindow
+}
+
+// The stats window a read could not reach — closed by hand, say — is forgotten,
+// so the next read opens another rather than asking a gone window forever.
+const forgetStatsWindow = (windowId) => {
+  if (shared?.statsWindow === windowId) {
+    shared.statsWindow = null
+    shared.statsWindowPromise = null
+  }
 }
 
 // One read of the whole page: which connection belongs to which page URL, and
@@ -284,9 +363,13 @@ const INTERNALS_READ = [
 const readInternals = async () => {
   const windowId = await ensureStatsWindow()
   if (!windowId) return null
-  const out = await speak(onWindow(windowId, `return execute _t javascript ${quote(INTERNALS_READ)}`)).catch(
-    () => '',
-  )
+  let out = ''
+  try {
+    out = await speak(onWindow(windowId, `return execute _t javascript ${quote(INTERNALS_READ)}`))
+  } catch (error) {
+    if (/window is gone/u.test(error.message)) forgetStatsWindow(windowId)
+    return null
+  }
   try {
     return JSON.parse(out)
   } catch {
@@ -360,7 +443,7 @@ const startShared = async (media, options) => {
         await preflightPermissions()
       }
       const ids = await windowIds()
-      if (ids.length > 0) return { child, userDataDir, windows: new Set(), spare: ids[0] }
+      if (ids.length > 0) return { child, userDataDir, windows: new Set(), spare: ids[0], slots: 0 }
     }
     await new Promise((resolve) => setTimeout(resolve, 300))
   }
@@ -368,7 +451,11 @@ const startShared = async (media, options) => {
   throw new Error('the Call Bots browser did not come up for the Meet guests')
 }
 
-const stop = (child, userDataDir) => {
+// The kill itself is synchronous, so an exit handler can call this without
+// waiting; a caller that can wait gets the process's actual exit, so the
+// orchestrator's sweep does not find a browser still on its way out and
+// report it as a leftover.
+const stop = async (child, userDataDir) => {
   try {
     process.kill(-child.pid)
   } catch {
@@ -377,6 +464,10 @@ const stop = (child, userDataDir) => {
     } catch {
       // Already gone.
     }
+  }
+  const gone = Date.now() + EXIT_WAIT
+  while (Date.now() < gone && (await browserRunning())) {
+    await new Promise((resolve) => setTimeout(resolve, 200))
   }
   // Chrome keeps unlinking its own files for several seconds after the kill,
   // and a removal that lands inside that window loses — measured as one
@@ -438,6 +529,22 @@ const killOnExit = () => {
   }
 }
 
+// How long one read of webrtc-internals serves every asker. The dashboard's
+// state request and the health tick both want a summary; two reads a few
+// milliseconds apart would make the later one a rate over no time at all.
+const FRESH_MS = 1500
+// How long a closing browser gets to exit before its teardown stops waiting.
+const EXIT_WAIT = 5000
+// The gap between a window's first two reads, which together make its first
+// real rate. Longer than a refresh of webrtc-internals, or the pair could
+// straddle none and report a bot sending nothing.
+const FIRST_SAMPLE_MS = 2500
+// A rate is taken over this much history, not just the last two reads:
+// webrtc-internals refreshes its tables about once a second, and unevenly
+// while its window sits minimised, so two reads 1.5 s apart can straddle no
+// refresh (a rate of zero) or two (double). Over a wider window both even out.
+const RATE_WINDOW_MS = 6000
+
 export class GuestWindow {
   constructor(windowId, tag) {
     this.windowId = windowId
@@ -445,10 +552,11 @@ export class GuestWindow {
     // prints, so this window's connections can be told from the others'.
     this.tag = tag
     this.closed = false
-    // Cumulative bytes per stream from each reader's previous read; a rate is
-    // the difference over the real gap since that reader last looked.
-    this.lastStats = new Map()
-    this.lastSnap = new Map()
+    // Cumulative bytes per stream over the last RATE_WINDOW_MS of reads,
+    // shared by both readers: every read is another sample for the other.
+    this.samples = new Map()
+    this.cache = { summary: null, summaryAt: 0, snapshot: null, snapshotAt: 0 }
+    this.inFlight = { summary: null, snapshot: null }
   }
 
   static async open(media, options, { tag = 'guest' } = {}) {
@@ -475,6 +583,7 @@ export class GuestWindow {
       console.error('[guest-browser] window', windowId, 'for', tag, spare ? '(spare)' : '(new)')
     }
     shared.windows.add(windowId)
+    await placeWindow(windowId, shared.slots++)
     return new GuestWindow(windowId, tag)
   }
 
@@ -488,7 +597,35 @@ export class GuestWindow {
   // The expanded stream panel, in the shape the monitor's snapshot takes so
   // the dashboard needs no second renderer. Everything here is what
   // webrtc-internals already prints; this only arranges it.
-  async rtcSnapshot() {
+  rtcSummary() {
+    return this.#shared('summary', () => this.#readSummary())
+  }
+
+  rtcSnapshot() {
+    return this.#shared('snapshot', () => this.#readSnapshot())
+  }
+
+  // One read serves every asker for a moment, and a read in flight is shared
+  // rather than raced: a second Apple Event behind the first would only slow
+  // both down, and its answer would be a rate over nothing.
+  #shared(kind, read) {
+    if (this.cache[kind] !== null && Date.now() - this.cache[`${kind}At`] < FRESH_MS) {
+      return Promise.resolve(this.cache[kind])
+    }
+    if (this.inFlight[kind]) return this.inFlight[kind]
+    this.inFlight[kind] = read()
+      .then((value) => {
+        this.cache[kind] = value
+        this.cache[`${kind}At`] = Date.now()
+        return value
+      })
+      .finally(() => {
+        this.inFlight[kind] = null
+      })
+    return this.inFlight[kind]
+  }
+
+  async #readSnapshot() {
     if (this.closed) return null
     const page = await readInternals()
     if (!page) return null
@@ -498,14 +635,7 @@ export class GuestWindow {
     )
     if (mine.size === 0) return null
     const now = Date.now()
-    const seen = new Map()
-    // Its own window between reads: the summary polls every two seconds too,
-    // and a rate taken milliseconds after one of those is zero by construction.
-    const rate = (key, bytes) => {
-      const was = this.lastSnap.get(key)
-      seen.set(key, { bytes, at: now })
-      return was && now > was.at ? ((bytes - was.bytes) * 8) / (now - was.at) : 0
-    }
+    const rate = (key, bytes) => this.#rate(key, bytes, now)
     const r1 = (value) => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null)
     const num = (value) => (value === undefined || value === '' ? null : Number(value))
     const byId = (pc, id) => (id ? page.stats[`${pc}|${id}`] ?? null : null)
@@ -571,7 +701,6 @@ export class GuestWindow {
         dtls = stat.dtlsState
       }
     }
-    this.lastSnap = seen
     const lossValues = inbound.map((s) => s.lossPct).filter((v) => v !== null)
     if (lossValues.length > 0) loss = r1(Math.max(...lossValues))
     const up = r1(outbound.reduce((sum, s) => sum + (s.kbps ?? 0), 0))
@@ -591,10 +720,34 @@ export class GuestWindow {
     }
   }
 
-  async rtcSummary() {
+  async #readSummary() {
     if (this.closed) return null
-    const page = await readInternals()
+    let page = await readInternals()
     if (!page) return null
+    // A rate is the difference between two reads, so a first read on its own
+    // reports every stream at zero — and a dashboard opened the moment a bot
+    // lands would show it sending nothing. Take the baseline, wait a beat and
+    // read again; once per window.
+    if (this.samples.size === 0) {
+      if (this.#tally(page) === null) return null
+      await new Promise((resolve) => setTimeout(resolve, FIRST_SAMPLE_MS))
+      page = (await readInternals()) ?? page
+    }
+    return this.#tally(page)
+  }
+
+  // Kilobits per second of a cumulative byte counter over the last window of
+  // reads. Clamped: a counter that went backwards is a new stream, not debt.
+  #rate(key, bytes, now) {
+    const samples = this.samples.get(key) ?? []
+    samples.push({ bytes, at: now })
+    while (samples.length > 2 && now - samples[1].at >= RATE_WINDOW_MS) samples.shift()
+    this.samples.set(key, samples)
+    const first = samples[0]
+    return now > first.at ? Math.max(0, ((bytes - first.bytes) * 8) / (now - first.at)) : 0
+  }
+
+  #tally(page) {
     const marker = `#cb-${this.tag}`
     const mine = new Set(
       Object.entries(page.heads)
@@ -604,12 +757,7 @@ export class GuestWindow {
     if (mine.size === 0) return null
 
     const now = Date.now()
-    const seen = new Map()
-    const rate = (key, bytes) => {
-      const was = this.lastStats.get(key)
-      seen.set(key, { bytes, at: now })
-      return was && now > was.at ? ((bytes - was.bytes) * 8) / (now - was.at) : 0
-    }
+    const rate = (key, bytes) => this.#rate(key, bytes, now)
     const r1 = (value) => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null)
 
     let up = 0
@@ -642,7 +790,6 @@ export class GuestWindow {
         rtt = Number(stat.currentRoundTripTime) * 1000
       }
     }
-    this.lastStats = seen
     return {
       pcs: mine.size,
       via: false,
@@ -672,14 +819,31 @@ export class GuestWindow {
   // parses, so anything that arrives after the page has settled is too late to
   // see a single connection — the only chance is to get in during the load.
   async goto(target) {
-    await speak(this.#on(`set URL of _t to ${quote(this.#tagged(target))}`))
-    // `set URL` returns as soon as the navigation is asked for.
-    const deadline = Date.now() + 45_000
-    while (Date.now() < deadline) {
-      const state = await this.evaluate('document.readyState').catch(() => null)
-      if (state === 'interactive' || state === 'complete') return
-      await this.waitForTimeout(250)
+    const url = this.#tagged(target)
+    const wanted = url.split('#')[0]
+    // A `set URL` on a window Chrome has only just made can lose to the new
+    // tab page still committing underneath it — the tab stays on
+    // chrome://newtab and the bot polls a page that will never be Meet. So
+    // the address is checked, and set again until it holds.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await speak(this.#on(`set URL of _t to ${quote(url)}`))
+      const settled = Date.now() + 2500
+      while (Date.now() < settled) {
+        await this.waitForTimeout(250)
+        const current = await this.url().catch(() => '')
+        if (current.startsWith(wanted)) {
+          // `set URL` returns as soon as the navigation is asked for.
+          const deadline = Date.now() + 45_000
+          while (Date.now() < deadline) {
+            const state = await this.evaluate('document.readyState').catch(() => null)
+            if (state === 'interactive' || state === 'complete') return
+            await this.waitForTimeout(250)
+          }
+          return
+        }
+      }
     }
+    throw new Error('the Meet guest window would not navigate')
   }
 
   // `source` must be a SINGLE LINE: AppleScript string literals cannot span
@@ -749,7 +913,7 @@ export class GuestWindow {
     if (shared && shared.windows.size === 0) {
       const { child, userDataDir } = shared
       shared = null
-      stop(child, userDataDir)
+      await stop(child, userDataDir)
     }
   }
 }

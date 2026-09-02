@@ -102,6 +102,7 @@ export class Guest {
     // What the camera was last ASKED to be, so a camera that is off because
     // something dropped it can be told apart from one somebody turned off.
     this.wantCam = null
+    this.camIntentAt = 0 // when wantCam last changed; a read older than this is not judged
     this.camFixAttempts = 0
     this.videoDarkSince = null // when the camera last stopped reaching anyone
     this.videoHealAttempts = 0
@@ -285,11 +286,37 @@ export class Guest {
     return this.platform ? this.platform.camState(this.page) : Promise.resolve('unknown')
   }
 
+  // Every control's state, in one read where the platform offers one.
+  async controls() {
+    if (!this.platform) return { mic: 'unknown', cam: 'unknown', screen: 'unknown' }
+    if (this.platform.controls) return this.platform.controls(this.page)
+    const [mic, cam, screen] = await Promise.all([this.micState(), this.camState(), this.screenState()])
+    return { mic, cam, screen }
+  }
+
   setMic(on) {
     return this.platform ? this.platform.setMic(this.#ctx(), on) : Promise.resolve('unknown')
   }
 
+  // The watchdog stands down while a toggle is in flight, and its next tick
+  // reads fresh: a health read taken just before the click still says the old
+  // state, and judged against the new intent it looks like a camera somebody
+  // else turned off — which the watchdog would then click a second time.
   async setCam(on) {
+    const wasHealing = this.healing
+    this.healing = true
+    this.camIntentAt = Date.now()
+    try {
+      return await this.#setCamNow(on)
+    } finally {
+      this.healing = wasHealing
+      this.health = null
+      // A tick already in flight read the camera before the click landed.
+      this.camIntentAt = Date.now()
+    }
+  }
+
+  async #setCamNow(on) {
     if (!this.platform) return 'unknown'
     // Intent, recorded before the attempt: whether it lands or not, this is
     // what the camera is meant to be from here on.
@@ -563,8 +590,12 @@ export class Guest {
 
   async #pollHealth() {
     const fresh = this.health && Date.now() - this.health.at < 4000
+    const readAt = fresh ? this.health.at : Date.now()
     const cam = fresh ? this.health.cam : await this.camState().catch(() => 'unknown')
     const rtc = fresh ? this.health.rtc : await this.rtcSummary().catch(() => null)
+    // Judged on a read taken before somebody toggled the camera, this tick
+    // would put back what they just changed. Its successor reads fresh.
+    if (this.camIntentAt > readAt) return
     // A camera nobody turned off has to be put back before anything else: the
     // video watchdog ignores an off camera on purpose, so a publication the
     // app dropped — a codec fallback's republish that failed, say — would

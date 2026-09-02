@@ -427,14 +427,27 @@ const setDevice = async ({ page, log }, kind, which, on) => {
 // start presenting — but kept correct against the DOM so re-enabling it is one
 // boolean if that ever changes.
 
-const screenState = async (page) => {
-  const read = await readPage(page).catch(() => null)
-  if (!read) return 'unknown'
+const screenOf = (read) => {
   if (read.presenting) return 'on'
   if (read.canPresent) return 'off'
   // In the call with no present control at all is Meet saying the host turned
   // presenting off for everyone.
   return read.leave ? 'blocked' : 'unknown'
+}
+
+const screenState = async (page) => {
+  const read = await readPage(page).catch(() => null)
+  return read ? screenOf(read) : 'unknown'
+}
+
+// All three controls from one read. The dashboard asks for every bot every
+// couple of seconds, and for a guest each read is an Apple Event through a
+// channel that carries one at a time: three reads a bot a poll is what
+// congested it with three guests until every probe timed out.
+const controls = async (page) => {
+  const read = await readPage(page).catch(() => null)
+  if (!read) return { mic: 'unknown', cam: 'unknown', screen: 'unknown' }
+  return { mic: read.mic, cam: read.cam, screen: screenOf(read) }
 }
 
 const setScreen = async (ctx, on) => {
@@ -511,8 +524,22 @@ const join = async (ctx) => {
   let nonEnglishSince = null
   let noDevicesSince = null
   let clickedAt = 0
+  let sawMeet = false // anything but a blank page, ever
+  let reloaded = false
 
   for (;;) {
+    // A page that has drawn nothing by the halfway mark gets one more load:
+    // a request Meet dropped on the way in, or a window still on its new-tab
+    // page, otherwise costs the full minute and ends in a message that blames
+    // the link. Only ever for a page that showed nothing at all; a preview
+    // that is slow to finish is not reloaded out from under the bot. Before
+    // the read, because a page that cannot be read at all is the case.
+    if (phase === 'entry' && !sawMeet && !reloaded && Date.now() > deadline - ENTRY_TIMEOUT / 2) {
+      reloaded = true
+      log.info('Meet has drawn nothing yet — loading the page again')
+      await page.goto(target.url, { waitUntil: 'domcontentloaded' }).catch(() => {})
+    }
+
     const read = await readPage(page, { withText: true }).catch(() => null)
     if (!read) {
       // The page went away under us mid-read; the next tick either finds it
@@ -523,6 +550,7 @@ const join = async (ctx) => {
     // Sync on a Playwright page, async on a guest window.
     const url = await Promise.resolve(page.url()).catch(() => '')
     const { stage, detail } = classify(read, url, guest)
+    if (stage !== 'loading') sawMeet = true
     if (process.env.CALL_BOTS_DEBUG_MEET) {
       console.error('[meet]', stage, JSON.stringify({ ...read, headline: read.headline.slice(0, 90) }))
     }
@@ -743,6 +771,7 @@ export default {
   setMic: (ctx, on) => setDevice(ctx, 'mic', 'mic', on),
   setCam: (ctx, on) => setDevice(ctx, 'camera', 'cam', on),
   screenState,
+  controls,
   setScreen,
   remote,
   leave: async ({ page, log }) => {

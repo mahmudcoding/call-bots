@@ -98,7 +98,35 @@ const ensureBrowser = () => {
   })
 }
 
+// One snapshot serves every asker for a moment, and one in flight is shared:
+// a state read costs a round trip per bot, and for Meet guests that round trip
+// is an Apple Event through a channel that carries one at a time. Two
+// dashboards, or one polling hard, must not multiply that work — three guests
+// under a one-second poll had every probe timing out at once.
+const STATE_TTL_MS = 700
+let snapshotCache = null // { at, value }
+let snapshotInFlight = null
+// And when the probes are slow — a machine saturated by the bots it runs —
+// the last snapshot is served at once while a fresh one is taken behind it,
+// so the dashboard shows something a few seconds old rather than nothing at
+// all. Only the very first read, with nothing to serve, waits.
 const stateSnapshot = async ({ withVerify = false } = {}) => {
+  const fresh = snapshotCache && Date.now() - snapshotCache.at < STATE_TTL_MS
+  if (!withVerify && fresh) return snapshotCache.value
+  if (!snapshotInFlight) {
+    snapshotInFlight = computeSnapshot({ withVerify })
+      .then((value) => {
+        snapshotCache = { at: Date.now(), value }
+        return value
+      })
+      .finally(() => {
+        snapshotInFlight = null
+      })
+  }
+  return snapshotCache ? snapshotCache.value : snapshotInFlight
+}
+
+const computeSnapshot = async ({ withVerify = false } = {}) => {
   const roster = session.roster
   let rosterState = null
   if (roster) {
@@ -424,6 +452,8 @@ export const startServer = async ({ port = 4610, open = true, profileStore = nul
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`)
     try {
+      // Whatever a mutation does, the next read must see it.
+      if (request.method !== 'GET') snapshotCache = null
       if (request.method !== 'GET' && !localCaller(request)) {
         json(response, 403, { ok: false, error: 'this dashboard only takes requests from itself' })
         return
@@ -434,7 +464,7 @@ export const startServer = async ({ port = 4610, open = true, profileStore = nul
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/state') {
-        json(response, 200, (await stateSnapshot({ withVerify: true })).state)
+        json(response, 200, (await stateSnapshot()).state)
         return
       }
       if (request.method === 'GET' && url.pathname === '/api/events') {

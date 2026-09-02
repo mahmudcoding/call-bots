@@ -34,6 +34,15 @@ const bounded = (promise, fallback) =>
 // 'account' when asked for — and anywhere guests cannot exist: a guest is a
 // real Chrome window driven through Apple Events, which is a macOS thing.
 // Otherwise a Meet run needs no setup at all.
+const MEET_CLIP_MAX = 1280
+const withMeetClip = (options) => {
+  const [width, height] = String(options.size ?? '1920x1080').split('x').map(Number)
+  if (!width || !height || width <= MEET_CLIP_MAX) return options
+  const scale = MEET_CLIP_MAX / width
+  const even = (value) => Math.round((value * scale) / 2) * 2
+  return { ...options, size: `${MEET_CLIP_MAX}x${even(height)}` }
+}
+
 export const meetMode = (value) => {
   if (value === 'account') return 'account'
   if (value === 'guest') return 'guest'
@@ -159,13 +168,13 @@ export class Roster {
     if (target) this.target = target
     if (!this.target) throw new Error('no call link — paste the call link first')
 
-    const total = this.guests.length + count
-    const warning = concurrencyWarning(total)
-    if (warning) log.warn(warning)
     // Meet takes bots either way: as saved Google accounts, or as anonymous
     // guests that type a name and wait to be admitted. Only the account path
     // needs an identity pool, and only it overrides the bot's label.
     const isMeet = this.target.platform === 'meet'
+    const total = this.guests.length + count
+    const warning = concurrencyWarning(total, undefined, { meet: isMeet })
+    if (warning) log.warn(warning)
     const useAccounts = isMeet && meetMode(overrides?.meetMode ?? this.options.meetMode) === 'account'
     const label = useAccounts ? '' : String(overrides?.label ?? this.options.label ?? '').trim()
 
@@ -195,7 +204,9 @@ export class Roster {
     log.info(`preparing ${users.length} bot(s)`)
     let media
     try {
-      media = await ensureGuestFixtures(users, this.options)
+      // Meet sends at most 720p, so a 1080p camera clip is decoded and scaled
+      // down for nothing — on a machine these bots already push to its limit.
+      media = await ensureGuestFixtures(users, isMeet ? withMeetClip(this.options) : this.options)
     } catch (error) {
       for (const profile of meetProfiles) profile.release()
       throw error
@@ -320,14 +331,12 @@ export class Roster {
         // recorded, and its controls have to come back to life.
         await bounded(guest.recoverIfAdmitted(), null)
         const inCall = guest.state === 'in-call'
-        const [mic, cam, screen, rtc] = inCall
+        const [{ mic, cam, screen }, rtc] = inCall
           ? await Promise.all([
-              bounded(guest.micState(), 'unknown'),
-              bounded(guest.camState(), 'unknown'),
-              bounded(guest.screenState(), 'unknown'),
+              bounded(guest.controls(), { mic: 'unknown', cam: 'unknown', screen: 'unknown' }),
               bounded(guest.rtcSummary(), null),
             ])
-          : [null, null, null, null]
+          : [{ mic: null, cam: null, screen: null }, null]
         // Hand the health tick what was just read, so an open dashboard makes
         // the watchdog free rather than doubling its work.
         guest.health = { at: Date.now(), cam, rtc }
