@@ -241,13 +241,21 @@ const ensureStatsWindow = async () => {
 // One read of the whole page: which connection belongs to which page URL, and
 // the handful of fields the dashboard shows. Everything else on the page is
 // SDP and candidate grids the reader never touches.
-// Single line, like everything sent through AppleScript. Picks the biggest
-// video that is actually playing, which in the call is the bot's own tile.
+// Single line, like everything sent through AppleScript. The bot's own tile
+// first — it is the one carrying Meet's own-video controls (Reframe,
+// Backgrounds, effects), which no remote tile has — and only then the biggest
+// playing video, because in a grid of three the biggest can be somebody else's
+// dark camera.
 const GRAB_VIDEO = [
   '(function(){',
+  'var playing=function(v){return v&&v.readyState>=2&&v.videoWidth>0&&!v.paused};',
   'var best=null,area=0;',
-  '[].slice.call(document.querySelectorAll("video")).forEach(function(v){',
-  '  if(v.readyState<2||v.videoWidth===0||v.paused)return;',
+  '[].slice.call(document.querySelectorAll("[data-participant-id]")).forEach(function(t){',
+  '  if(best)return;',
+  '  if(!t.querySelector("[aria-label*=Reframe i],[aria-label*=Backgrounds i],[aria-label*=effects i]"))return;',
+  '  var v=t.querySelector("video");if(playing(v))best=v});',
+  'if(!best)[].slice.call(document.querySelectorAll("video")).forEach(function(v){',
+  '  if(!playing(v))return;',
   '  var r=v.getBoundingClientRect();var a=r.width*r.height;if(a>area){area=a;best=v}});',
   'if(!best)return "";',
   'var w=320,h=Math.max(1,Math.round(w*best.videoHeight/best.videoWidth));',
