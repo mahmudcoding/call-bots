@@ -340,17 +340,18 @@ const runAction = async (slug, action, value) => {
 const thumbnail = async (slug) => {
   const guest = session.roster?.bySlug(slug)
   if (!guest?.page || guest.state === 'closed') return null
-  // A Meet guest's window is scripted through AppleScript, not Playwright, so
-  // there is nothing here that can take a screenshot. Its card shows the
-  // placeholder, and the window itself is on screen anyway.
-  if (!guest.instrumented) return null
+  // A Meet guest has no Playwright page, but it does have a real window — it
+  // photographs the screen where that window is instead.
+  const shoot = guest.instrumented
+    ? () => guest.page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 })
+    : () => guest.page.screenshot?.() ?? Promise.resolve(null)
   const cached = thumbCache.get(slug)
   const now = Date.now()
   if (cached?.buffer && now - cached.at < THUMB_TTL_MS) return cached.buffer
   if (cached?.inFlight) return cached.inFlight
   const inFlight = Promise.race([
-    guest.page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 }),
-    new Promise((resolve) => setTimeout(() => resolve(null), 4500)),
+    shoot(),
+    new Promise((resolve) => setTimeout(() => resolve(null), 9000)),
   ])
     .then((buffer) => {
       thumbCache.set(slug, { at: Date.now(), buffer, inFlight: null })

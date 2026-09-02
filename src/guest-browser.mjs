@@ -18,7 +18,7 @@
 // See CLAUDE.md for the measurements behind every line of this.
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -240,23 +240,43 @@ export class GuestWindow {
     return new GuestWindow(windowId)
   }
 
-  #tab() {
-    return `active tab of (first window whose id is ${this.windowId})`
+  // Window ids run past 2^30, and AppleScript turns a literal that big into a
+  // real — "whose id is 1439954207" goes looking for 1.439954207E+9 and fails
+  // with "Invalid index". Comparing as text sidesteps the conversion entirely.
+  #on(body) {
+    return [
+      'set _w to missing value',
+      'repeat with _c in windows',
+      `  if ((id of _c) as text) is ${quote(this.windowId)} then set _w to _c`,
+      'end repeat',
+      'if _w is missing value then error "this Meet guest window is gone"',
+      'set _t to active tab of _w',
+      body,
+    ].join('\n')
   }
 
   async url() {
     if (this.closed) return 'about:blank'
-    return speak(`return URL of ${this.#tab()}`).catch(() => 'about:blank')
+    return speak(this.#on('return URL of _t')).catch(() => 'about:blank')
   }
 
-  async goto(target) {
-    await speak(`set URL of ${this.#tab()} to ${quote(target)}`)
+  // `inject` is a one-line expression to run as early as the new document will
+  // take it. Meet grabs RTCPeerConnection into a module closure while its bundle
+  // parses, so anything that arrives after the page has settled is too late to
+  // see a single connection — the only chance is to get in during the load.
+  async goto(target, { inject = null } = {}) {
+    await speak(this.#on(`set URL of _t to ${quote(target)}`))
     // `set URL` returns as soon as the navigation is asked for.
     const deadline = Date.now() + 45_000
+    let injected = false
     while (Date.now() < deadline) {
+      if (inject && !injected) {
+        const out = await this.evaluate(inject).catch(() => null)
+        if (out) injected = true
+      }
       const state = await this.evaluate('document.readyState').catch(() => null)
-      if (state === 'interactive' || state === 'complete') return
-      await this.waitForTimeout(250)
+      if (state === 'complete' || (state === 'interactive' && (!inject || injected))) return
+      await this.waitForTimeout(inject && !injected ? 30 : 250)
     }
   }
 
@@ -265,7 +285,7 @@ export class GuestWindow {
   // error. Anything structured is stringified in-page and parsed here.
   async evaluate(source) {
     if (this.closed) throw new Error('this Meet guest window is closed')
-    const out = await speak(`return execute ${this.#tab()} javascript ${quote(source)}`)
+    const out = await speak(this.#on(`return execute _t javascript ${quote(source)}`))
     if (out === 'missing value' || out === '') return null
     try {
       return JSON.parse(out)
@@ -278,6 +298,31 @@ export class GuestWindow {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
+  // The dashboard's card thumbnail. There is no page object to screenshot here,
+  // but the window is a real one on a real screen — so ask AppleScript where it
+  // is and photograph that rectangle. Whatever sits on top of it lands in the
+  // picture; the alternative is no picture at all.
+  async screenshot() {
+    if (this.closed) return null
+    const raw = await speak(this.#on('return bounds of _w')).catch(() => '')
+    const [left, top, right, bottom] = raw.split(',').map((value) => Number(value.trim()))
+    if (![left, top, right, bottom].every(Number.isFinite)) return null
+    const width = right - left
+    const height = bottom - top
+    if (width < 40 || height < 40) return null
+    const file = join(tmpdir(), `call-bots-shot-${this.windowId}-${Date.now()}.jpg`)
+    try {
+      await run('screencapture', ['-x', '-t', 'jpg', `-R${left},${top},${width},${height}`, file], {
+        timeout: 8_000,
+      })
+      return readFileSync(file)
+    } catch {
+      return null
+    } finally {
+      rmSync(file, { force: true })
+    }
+  }
+
   isClosed() {
     return this.closed
   }
@@ -285,7 +330,7 @@ export class GuestWindow {
   async close() {
     if (this.closed) return
     this.closed = true
-    await speak(`close (first window whose id is ${this.windowId})`).catch(() => {
+    await speak(this.#on('close _w')).catch(() => {
       // A window somebody already closed is not a teardown failure.
     })
     shared?.windows.delete(this.windowId)

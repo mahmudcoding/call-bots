@@ -745,13 +745,22 @@ export class Guest {
   // (navigated, or admitted after a timeout), a reinstall is kicked off so the
   // next tick heals on its own.
   async rtcSummary() {
-    if (
-      this.platform?.capabilities?.rtc === false ||
-      !this.instrumented ||
-      this.state !== 'in-call' ||
-      !this.page
-    ) {
+    if (this.platform?.capabilities?.rtc === false || this.state !== 'in-call' || !this.page) {
       return null
+    }
+    // A guest has no monitor to install, so its browser extension keeps the
+    // numbers instead and hands over the last snapshot on demand.
+    if (!this.instrumented) {
+      const raw = await this.page
+        .evaluate('window.__botGuestStats__ ? window.__botGuestStats__() : "null"')
+        .catch(() => null)
+      if (!raw) return null
+      const stats = typeof raw === 'string' ? JSON.parse(raw) : raw
+      // Meet takes RTCPeerConnection into a module closure while its bundle
+      // parses, so a hook injected during the load still misses every
+      // connection. Zeros would read as "publishing nothing", which is worse
+      // than admitting there is no measurement — the card shows dashes.
+      return stats?.pcs > 0 ? stats : null
     }
     const summary = await rtcSummary(this.page).catch(() => null)
     if (summary === null) this.#ensureMonitor().catch(() => {})
