@@ -55,12 +55,12 @@ const PERMISSION_HELP =
   'Call Bots needs permission to control System Events and the Call Bots browser — ' +
   'System Settings → Privacy & Security → Automation → Call Bots'
 
-const browserRunning = async () => {
+const browserRunning = async (timeout = 10_000) => {
   let out
   try {
     out = await osascript(
       `tell application "System Events" to return (exists (first application process whose bundle identifier is ${quote(BUNDLE_ID)}))`,
-      10_000,
+      timeout,
     )
   } catch (error) {
     if (NOT_PERMITTED.test(String(error.message))) throw new Error(PERMISSION_HELP)
@@ -74,7 +74,9 @@ const browserRunning = async () => {
 // bots are already launching gets answered late or not at all — measured as a
 // guest that never navigated and two stray windows in the user's own Chrome.
 const preflightPermissions = async () => {
-  await browserRunning()
+  // The call blocks while macOS's dialog is up, so it gets the time a person
+  // needs to read it and click Allow — not the ten seconds a status check gets.
+  await browserRunning(120_000)
 }
 
 const processCount = async () =>
