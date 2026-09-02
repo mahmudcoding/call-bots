@@ -3,7 +3,7 @@
   "version": "0.5.4",
   "private": true,
   "type": "module",
-  "description": "Put any number of guests into an Aloqa call — real WebRTC audio and video from synthetic capture devices",
+  "description": "Put synthetic audio and video bots into Aloqa and Google Meet calls",
   "bin": {
     "call-bots": "./src/cli.mjs"
   },
@@ -15,6 +15,8 @@
     "clean": "node src/cli.mjs clean",
     "postinstall": "node scripts/postinstall.mjs",
     "test:platforms": "node scripts/test-platforms.mjs",
+    "test:meet-profiles": "node scripts/test-meet-profiles.mjs",
+    "test:cli": "node scripts/test-cli.mjs",
     "test:guest": "node scripts/test-guest.mjs",
     "test:ui": "node scripts/test-ui.mjs",
     "test:rtc": "node scripts/test-rtc.mjs",

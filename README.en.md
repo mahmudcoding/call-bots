@@ -2,15 +2,17 @@
 
 *По-русски: [README.md](README.md)*
 
-Put any number of bots into an Aloqa call from one computer. Each bot is a real
-browser that opens the call's invite link, types a name, and publishes real
-WebRTC audio and video. They join as anonymous guests, so there are no accounts
-and nothing to provision — the invite link is the only input.
+Put bots into Aloqa or Google Meet calls from one computer. Each bot is a real
+browser that opens the call link and publishes real audio and video. Aloqa bots
+join as anonymous guests, so there is nothing to provision. Google Meet is the
+rare case: it needs one manually signed-in Google account per concurrent bot,
+managed by the app, and it stays out of the dashboard until you paste a Meet
+link.
 
 ## One command
 
 ```bash
-./run.sh --link "<invite-link>" --bots 10
+./run.sh --link "<call-link>" --bots 10
 ```
 
 That is the whole setup. It installs its own Node, its own Chromium and
@@ -40,14 +42,46 @@ to localhost, so on a server reach it through a tunnel:
 ssh -L 4610:127.0.0.1:4610 <user>@<server>
 ```
 
+## Google Meet accounts
+
+Meet is a rare guest here, so it stays out of sight: paste a
+`https://meet.google.com/abc-defg-hij` link and one line appears under the link
+field saying how many accounts are ready. With an Aloqa link, or none, the
+dashboard says nothing about Meet at all.
+
+Each concurrent Meet bot needs its own Google account, and Google Chrome must be
+installed. **Manage → Add account** opens Chrome on an isolated Call Bots
+profile — sign in there and the row confirms it while the window is still open;
+close that window and the account turns Ready. **Check** reopens a saved profile
+quietly and reports whether Google still accepts it, so a session that has
+expired is found before a batch is, not halfway through one. **Remove** deletes
+only that local session, never the Google account.
+
+Bots use their Google display names, enter directly when permitted, or wait for
+the host to admit them. Camera, microphone, participant checks, the RTC stream
+monitor and the dark-camera watchdog all work the same as on Aloqa — a Meet bot
+whose camera goes dark now gets healed like any other.
+
+Three things stay off for Meet, each because Meet itself will not do them:
+**screen sharing** (Meet is handed a live 1920x1080 track and then refuses to
+start presenting), **send codecs** (Meet negotiates its own list and picks AV1
+from it whatever the preference says), and **`--label`** (a Meet bot is named by
+its Google account). The controls are hidden rather than left to fail, and the
+checks behind them are in `src/platforms/meet.mjs`.
+
+**Meet must be in English.** Meet renders in the signed-in account's own Google
+language, which overrides the language in the link, and the adapter reads
+Meet's English controls. An account set to another language is reported as such
+rather than timing out.
+
 ## What a bot publishes
 
 - **Camera** — footage of a person at a desk, 1920x1080 at 30fps. Five clips,
   one per bot, so a call looks like different people.
 - **Microphone** — a recording of a real man talking, continuously. Five
   voices, one per bot.
-- **Screen share** — a wildflower meadow at 1920x1080, captioned with the bot's
-  name and a clock.
+- **Screen share (Aloqa)** — a wildflower meadow at 1920x1080, captioned with
+  the bot's name and a clock.
 
 All of it ships with the app. To use your own, drop files in
 `~/Library/Application Support/CallBots/fixtures` (macOS) — `screen.webm` for
@@ -61,7 +95,10 @@ replace the camera clips. Sources and licences are in
   publishing bots on a 16 GB laptop, more with `--camera off --mic off`. Past
   that, CPU contention degrades the media itself.
 - **Getting in.** On entry mode **Open** bots walk straight in. On **Wait for
-  admission** they queue in the lobby and wait up to ten minutes for you.
+  admission** they queue in the lobby and wait up to ten minutes for you. Meet
+  accounts likewise enter directly when allowed or wait for the host — and a
+  Meet bot that is let straight in reports a failure in a minute rather than
+  sitting out the ten-minute lobby budget that never applied to it.
 - **Screen sharing** is `--share <n|all>` — that many bots start sharing once
   they are in. It needs Meeting settings → Screen share → **Allowed**. If it
   was previously *On request*, send the bots again: Aloqa does not lift that one
@@ -101,9 +138,9 @@ replace the camera clips. Sources and licences are in
   ad-hoc signed. After that the app checks every time it opens and once daily
   while it stays open; use **Call Bots → Check for Updates…** to check
   immediately.
-- **Selector drift** after an Aloqa deploy is fixed in one file,
-  `src/platforms/aloqa.mjs`. `npm run test:platforms` checks the adapter against
-  a mock of that DOM.
+- **Selector drift** is isolated in `src/platforms/aloqa.mjs` and
+  `src/platforms/meet.mjs`. `npm run test:platforms` checks both adapters
+  against mock pages; a real call remains the final acceptance check.
 
 ## Releasing a Mac version
 

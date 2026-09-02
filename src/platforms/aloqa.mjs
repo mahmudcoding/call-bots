@@ -15,6 +15,14 @@ const TOGGLE_TIMEOUT = 8_000
 // Picking a capture source and publishing it takes longer than a mute toggle.
 const SHARE_TIMEOUT = 15_000
 
+export const capabilities = Object.freeze({
+  mic: true,
+  camera: true,
+  screen: true,
+  rtc: true,
+  codecs: true,
+})
+
 export const SEL = {
   // guest entry (/join/<token>) — anonymous, no account.
   // The form carries no testids; the name attribute and the form submit are the
@@ -206,6 +214,7 @@ const setScreen = async (ctx, on) => {
 export default {
   id: 'aloqa',
   label: 'Aloqa',
+  capabilities,
   // Guests have no lobby, so devices start off and are armed after joining.
   armAfterJoin: true,
   parse,

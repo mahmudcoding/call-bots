@@ -57,13 +57,12 @@ const roleStream = (role) => (stream) => {
   return stream.kind === 'video' && stream.role !== 'screen'
 }
 
-// One anonymous participant: a real browser that opens the call link, types a
-// name, and publishes fake-device audio and video. No account, nothing to
-// provision. Everything platform-specific — how to get in, where the device
-// toggles are, how to read the participant grid — lives in the adapter under
-// src/platforms; this class only sequences it.
+// One participant: either an anonymous Aloqa guest or a Google account in its
+// own saved Meet profile. Everything platform-specific — how to get in, where
+// the device toggles are, how to read the participant grid — lives in the
+// adapter under src/platforms; this class only sequences it.
 export class Guest {
-  constructor(guest, media, options) {
+  constructor(guest, media, options, meetProfile = null) {
     this.user = guest // {n, label, slug, index}
     this.media = media
     this.options = options
@@ -82,7 +81,17 @@ export class Guest {
     this.context = null
     this.page = null
     this.lastError = null
+    this.waitingAdmission = false
     this.platform = null
+    this.meetProfile = meetProfile
+    this.account = meetProfile
+      ? {
+          id: meetProfile.id,
+          displayName: meetProfile.displayName,
+          accountNumber: meetProfile.accountNumber,
+        }
+      : null
+    this.closeBrowser = null
     this.screenPage = null
     this.monitorInstall = null // in-flight stream-monitor install, so retries dedupe
     this.monitorWarned = false // warn once per breakage, not every status tick
@@ -112,11 +121,22 @@ export class Guest {
     return this.user.label
   }
 
-  async start() {
-    const launched = await launchGuest(this.user, this.media, this.options, this.codecs)
+  async start(target) {
+    const platform = platformById(target?.platform)
+    if (!platform) throw new Error(`no adapter for platform "${target?.platform}"`)
+    this.platform = platform
+    this.target = target
+    const launched = await launchGuest(
+      this.user,
+      this.media,
+      this.options,
+      this.codecs,
+      this.meetProfile,
+    )
     this.browser = launched.browser
     this.context = launched.context
     this.page = launched.page
+    this.closeBrowser = launched.close
     this.state = 'ready'
   }
 
@@ -124,13 +144,20 @@ export class Guest {
     return failureShot(this.page, this.options.runDir, this.user.slug, name)
   }
 
-  #fail = async (name, message) => {
-    const shot = await this.#shot(name)
+  #fail = async (name, message, { screenshot = true } = {}) => {
+    const shot = screenshot ? await this.#shot(name) : null
     this.state = `error:${name}`
     this.lastError = message
-    throw new Error(
-      `[${this.label}] ${message} (url: ${this.page.url()}${shot ? `, screenshot: ${shot}` : ''})`,
-    )
+    // A failure can race a teardown that has already dropped the page, and an
+    // error handler that throws its own TypeError loses the real message.
+    const where = (() => {
+      try {
+        return this.page?.url() ?? 'page closed'
+      } catch {
+        return 'page closed'
+      }
+    })()
+    throw new Error(`[${this.label}] ${message} (url: ${where}${shot ? `, screenshot: ${shot}` : ''})`)
   }
 
   // The context the adapter works against.
@@ -142,12 +169,16 @@ export class Guest {
       log: this.log,
       fail: this.#fail,
       options: this.options,
+      meetProfile: this.meetProfile,
+      setWaitingAdmission: (waiting) => {
+        this.waitingAdmission = Boolean(waiting)
+      },
       prepareScreen: () => this.#prepareScreen(),
     }
   }
 
   async join(target) {
-    const platform = platformById(target.platform)
+    const platform = this.platform ?? platformById(target.platform)
     if (!platform) throw new Error(`no adapter for platform "${target.platform}"`)
     this.platform = platform
     this.target = target
@@ -173,13 +204,15 @@ export class Guest {
     }
     // After the devices settle, so the injection never competes with the
     // arming clicks. Losing the monitor is not losing the bot.
-    await this.#ensureMonitor().catch(() => {})
-    // The join navigated, and navigation re-seeds the page with the LAUNCH
-    // codec preferences — anything switched while this bot was still on its
-    // way has to be pushed again now that the call page is settled.
-    await this.#syncCodecs().catch(() => {})
-    // Only now can the wire be read, so only now can a launch codec be judged.
-    await this.#proveLaunchCodecs().catch(() => {})
+    if (platform.capabilities?.rtc !== false) {
+      await this.#ensureMonitor().catch(() => {})
+      // The join navigated, and navigation re-seeds the page with the LAUNCH
+      // codec preferences — anything switched while this bot was still on its
+      // way has to be pushed again now that the call page is settled.
+      await this.#syncCodecs().catch(() => {})
+      // Only now can the wire be read, so only now can a launch codec be judged.
+      await this.#proveLaunchCodecs().catch(() => {})
+    }
     this.log.info('in call')
   }
 
@@ -260,7 +293,7 @@ export class Guest {
     // SDP, while the SFU forwards the publication by the codec the client's
     // own publish request named. A camera arriving on a launch-time codec has
     // to go out the LiveKit way to be the codec everyone else receives.
-    if (on && state === 'on' && this.codecs.video) {
+    if (on && state === 'on' && this.codecs.video && this.platform.capabilities?.codecs !== false) {
       await this.#lkSwitch('video', this.codecs.video).catch(() => {})
       // At join this runs before the monitor is installed, so there is nothing
       // to read yet — join() proves the codec a moment later, once there is. A
@@ -286,6 +319,7 @@ export class Guest {
   // the card would go on showing the codec as though it were working, so the
   // outcome stays on the bot until the next pick.
   async setCodec(role, codec) {
+    if (this.platform?.capabilities?.codecs === false) return 'unsupported'
     const result = await this.#applyCodec(role, codec)
     const name = this.codecs[role] ?? codec
     this.note =
@@ -502,6 +536,7 @@ export class Guest {
   // bot heals whether or not anyone is watching it — a headless `join` run has
   // no dashboard at all, and its bots have to come back just the same.
   async pollHealth() {
+    if (this.platform?.capabilities?.rtc === false) return
     if (this.state !== 'in-call' || !this.page || this.page.isClosed()) return
     if (this.healing || this.polling) return
     this.polling = true
@@ -680,7 +715,7 @@ export class Guest {
   }
 
   async setScreen(on) {
-    if (!this.platform?.setScreen) return 'unknown'
+    if (!this.platform?.setScreen || this.platform.capabilities?.screen === false) return 'unknown'
     const state = await this.platform.setScreen(this.#ctx(), on)
     // A share born under a stored screen preference republishes to it right
     // away, the LiveKit way — the publication is seconds old and cheap to
@@ -703,7 +738,9 @@ export class Guest {
   // (navigated, or admitted after a timeout), a reinstall is kicked off so the
   // next tick heals on its own.
   async rtcSummary() {
-    if (this.state !== 'in-call' || !this.page) return null
+    if (this.platform?.capabilities?.rtc === false || this.state !== 'in-call' || !this.page) {
+      return null
+    }
     const summary = await rtcSummary(this.page).catch(() => null)
     if (summary === null) this.#ensureMonitor().catch(() => {})
     return summary
@@ -711,7 +748,9 @@ export class Guest {
 
   // Full sanitized stream model for the expanded card panel.
   async rtcSnapshot() {
-    if (this.state !== 'in-call' || !this.page) return null
+    if (this.platform?.capabilities?.rtc === false || this.state !== 'in-call' || !this.page) {
+      return null
+    }
     return rtcSnapshot(this.page).catch(() => null)
   }
 
@@ -746,18 +785,53 @@ export class Guest {
     return this.#shot(name)
   }
 
-  async teardown() {
-    if (!this.browser) return
-    try {
-      await this.leave()
-    } catch (error) {
-      this.log.warn(`teardown failed: ${error.message}`)
+  releaseProfile() {
+    this.meetProfile?.release?.()
+    this.meetProfile = null
+  }
+
+  async #closeBrowserProcess() {
+    const close = this.closeBrowser
+    this.closeBrowser = null
+    if (close) {
+      await Promise.race([
+        Promise.resolve().then(close).catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, 8000)),
+      ])
     }
-    await Promise.race([
-      this.browser.close().catch(() => {}),
-      new Promise((resolve) => setTimeout(resolve, 8000)),
-    ])
-    this.state = 'closed'
-    this.log.info('closed')
+    this.browser = null
+    this.context = null
+    this.page = null
+  }
+
+  // A Meet account must become available again as soon as its bot fails. Keep
+  // the error on the card, but close the failed browser and release its lease.
+  async closeAfterFailure() {
+    try {
+      await this.#closeBrowserProcess()
+    } finally {
+      this.releaseProfile()
+    }
+  }
+
+  async teardown() {
+    if (!this.browser && !this.context) {
+      this.waitingAdmission = false
+      this.releaseProfile()
+      return
+    }
+    try {
+      try {
+        await this.leave()
+      } catch (error) {
+        this.log.warn(`teardown failed: ${error.message}`)
+      }
+      await this.#closeBrowserProcess()
+    } finally {
+      this.waitingAdmission = false
+      this.releaseProfile()
+      this.state = 'closed'
+      this.log.info('closed')
+    }
   }
 }

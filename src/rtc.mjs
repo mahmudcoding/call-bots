@@ -43,6 +43,13 @@ function pageSummary() {
   if (!api) return null
   const m = api.model
   if (!m) return { pcs: 0 }
+  // An installed monitor that has found nothing yet is the normal state right
+  // after a join — the app has not built its connections. Ask it to look again
+  // rather than reporting a dead call forever; the codec shim publishes the
+  // page's connections, so a rescan lands them the moment they exist.
+  if (!m.pcs) {
+    try { api.rescan() } catch { /* a rescan that throws is not worth a lost tick */ }
+  }
   const r1 = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v * 10) / 10 : null)
   // Distinct tracks, not streams: simulcast encodes one camera track several
   // times, and three layers must not read as three cameras.

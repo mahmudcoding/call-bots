@@ -1,15 +1,16 @@
 import aloqa from './aloqa.mjs'
+import meet from './meet.mjs'
 
 // One file per platform, each owning its own selectors, join sequence, device
 // toggles and participant grid. Adding one means adding a file and listing it
 // here; a platform tied to a single host goes before Aloqa, which runs on any
 // origin and matches by the shape of the path.
-export const PLATFORMS = [aloqa]
+export const PLATFORMS = [meet, aloqa]
 
 export const platformById = (id) => PLATFORMS.find((platform) => platform.id === id) ?? null
 
-// The link is the only input the app needs: it says which platform to drive,
-// which origin to grant camera and microphone to, and where to send the bot.
+// The link says which platform to drive, which origin gets media permission,
+// and where to send the bot. Meet identity is allocated separately afterwards.
 export const resolveLink = (input) => {
   const raw = String(input ?? '').trim()
   if (!raw) throw new Error('paste the call link')
@@ -27,5 +28,8 @@ export const resolveLink = (input) => {
     const target = platform.parse(url)
     if (target) return { ...target, platform: platform.id, label: platform.label }
   }
-  throw new Error('expected a call invite link like …/join/<token>, got ' + url.pathname)
+  throw new Error(
+    'that link is not recognised — paste a Google Meet link ' +
+      '(meet.google.com/abc-defg-hij) or an Aloqa call invite (…/join/<token>)',
+  )
 }

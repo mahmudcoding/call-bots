@@ -214,11 +214,11 @@ if [ "$MODE" = ui ]; then
   exec node src/cli.mjs ui --port "$PORT" --no-open
 fi
 
-[ -n "$LINK" ] || die "--link is required (the call's invite link)"
+[ -n "$LINK" ] || die "--link is required (the call link)"
 
 printf '\n'
 say "sending $BOTS bot(s) — camera $CAMERA, mic $MIC"
-say "the call needs entry mode Open: nobody is here to admit them"
+say "if the call uses a lobby, admit the waiting bots from the host"
 printf '\n'
 exec node src/cli.mjs join "$LINK" --bots "$BOTS" --camera "$CAMERA" --mic "$MIC" \
   ${SHARE:+--share "$SHARE"} \

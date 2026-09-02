@@ -5,21 +5,23 @@ import { RUN_MARKER } from './browser.mjs'
 import { ensureDirs } from './config.mjs'
 import { ensureGuestFixtures } from './fixtures.mjs'
 import { plain as log } from './log.mjs'
+import { meetProfileStore } from './meet-profiles.mjs'
 import { Roster } from './orchestrator.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
-import { resolveLink } from './platforms/index.mjs'
+import { platformById, resolveLink } from './platforms/index.mjs'
 
-const USAGE = `Call Bots — put any number of bots into an Aloqa call
+const USAGE = `Call Bots — put bots into Aloqa or Google Meet calls
 
 usage:
   call-bots ui [--port 4610]        open the app window (recommended)
-  call-bots join <invite-link>      send bots in from the terminal
+  call-bots join <call-link>        send bots in from the terminal
   call-bots fixtures [--regen]      (re)generate the camera video and audio
   call-bots doctor                  check browser, speech, machine limits
   call-bots clean                   kill leftover bot browser processes
 
 options:
   --bots <n>         how many bots to send (default 2)
+  --label <text>     custom bot label (Meet names bots after their account)
   --headed           show the bot browser windows (default: headless)
   --browser <name>   chrome, chromium, or auto (default)
   --share <n|all>    have that many bots share a screen once they are in
@@ -34,8 +36,8 @@ options:
   --fps <n>          camera video frame rate (default 12)
   --regen            rebuild the media even if it is cached
 
-Bots join as anonymous guests, so they need no accounts: the call's
-invite link is the only input.`
+Aloqa bots join anonymously. Google Meet bots use Google accounts configured
+in the Call Bots app, with one ready account required per concurrent bot.`
 
 const parseCli = () => {
   const { values, positionals } = parseArgs({
@@ -44,6 +46,7 @@ const parseCli = () => {
     options: {
       bots: { type: 'string' },
       guests: { type: 'string' },
+      label: { type: 'string' },
       headed: { type: 'boolean', default: false },
       browser: { type: 'string', default: 'auto' },
       share: { type: 'string' },
@@ -74,6 +77,7 @@ const buildOptions = (values, baseUrl) => ({
   // The state a bot arrives in; its clip and voice stay attached either way.
   startCam: values.camera !== 'off',
   startMic: values.mic !== 'off',
+  label: values.label?.trim() ?? '',
   // Lowercased here; the in-page shim decides whether the browser can send it.
   audioCodec: values['audio-codec']?.toLowerCase() ?? null,
   videoCodec: values['video-codec']?.toLowerCase() ?? null,
@@ -127,10 +131,33 @@ const main = async () => {
 
   if (command === 'join') {
     const link = positionals[0]
-    if (!link) throw new Error('usage: call-bots join <invite-link> [--bots <n>]')
+    if (!link) throw new Error('usage: call-bots join <call-link> [--bots <n>]')
     const target = resolveLink(link)
-    const count = Number(values.bots ?? values.guests) || 2
-    const roster = new Roster(buildOptions(values, target.origin))
+    const count = Math.max(1, Math.min(50, Number(values.bots ?? values.guests) || 2))
+    // Refuse the flags this platform genuinely cannot honour, from what it
+    // declares rather than from a list of platform names kept in this file.
+    const platform = platformById(target.platform)
+    const caps = platform?.capabilities ?? {}
+    const unavailable = [
+      // Meet names a bot after its Google account; nothing can rename it.
+      values.label && target.platform === 'meet' ? '--label' : null,
+      values.share && caps.screen === false ? '--share' : null,
+      values['audio-codec'] && caps.codecs === false ? '--audio-codec' : null,
+      values['video-codec'] && caps.codecs === false ? '--video-codec' : null,
+      values['screen-codec'] && caps.codecs === false ? '--screen-codec' : null,
+    ].filter(Boolean)
+    if (unavailable.length > 0) {
+      throw new Error(
+        `${unavailable.join(', ')} ${unavailable.length === 1 ? 'is' : 'are'} ` +
+          `unavailable for ${platform?.label ?? target.platform}`,
+      )
+    }
+    let profileStore = null
+    if (target.platform === 'meet') {
+      profileStore = meetProfileStore()
+      profileStore.assertAvailable(count)
+    }
+    const roster = new Roster(buildOptions(values, target.origin), { profileStore })
 
     let interrupted = 0
     const onSigint = () => {

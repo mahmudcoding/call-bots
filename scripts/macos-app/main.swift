@@ -211,6 +211,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     if let url = navigationAction.request.url { NSWorkspace.shared.open(url) }
     return nil
   }
+
+  func webView(_ webView: WKWebView,
+               runJavaScriptConfirmPanelWithMessage message: String,
+               initiatedByFrame frame: WKFrameInfo,
+               completionHandler: @escaping (Bool) -> Void) {
+    let alert = NSAlert()
+    alert.messageText = "Call Bots"
+    alert.informativeText = message
+    alert.addButton(withTitle: "Remove")
+    alert.addButton(withTitle: "Cancel")
+    completionHandler(alert.runModal() == .alertFirstButtonReturn)
+  }
 }
 
 let app = NSApplication.shared

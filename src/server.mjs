@@ -5,11 +5,12 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { bundledChromiumPath, systemChromePath } from './browser.mjs'
+import { bundledChromiumPath, probeMeetSession, systemChromePath } from './browser.mjs'
 import { onLog, plain as log } from './log.mjs'
 import { machineProfile, systemUsage } from './machine.mjs'
+import { meetProfileStore } from './meet-profiles.mjs'
 import { Roster } from './orchestrator.mjs'
-import { resolveLink } from './platforms/index.mjs'
+import { platformById, resolveLink } from './platforms/index.mjs'
 
 const UI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'ui.html')
 
@@ -27,6 +28,8 @@ const session = {
   lastError: null,
 }
 
+let profiles = null
+
 const sseClients = new Set()
 const thumbCache = new Map() // slug -> {at, buffer, inFlight}
 const rtcCache = new Map() // slug -> {at, data, inFlight}
@@ -34,6 +37,15 @@ const rtcCache = new Map() // slug -> {at, data, inFlight}
 const broadcast = (message) => {
   const payload = `data: ${JSON.stringify(message)}\n\n`
   for (const client of sseClients) client.write(payload)
+}
+
+// Fire-and-forget: the store calls this from a timer, and a snapshot that fails
+// to build must not take a sign-in down with it.
+const announceProfiles = () => {
+  if (sseClients.size === 0) return
+  stateSnapshot()
+    .then((frame) => broadcast(frame))
+    .catch(() => {})
 }
 
 onLog((entry) => broadcast({ type: 'log', entry }))
@@ -106,6 +118,7 @@ const stateSnapshot = async ({ withVerify = false } = {}) => {
       browserReady: bundledChromiumPath() !== null || systemChromePath() !== null,
       browserInstalling: browserInstall !== null,
       browserProgress,
+      meetProfiles: profiles ? profiles.summary() : { profiles: [], available: 0, chromeReady: false },
       session: rosterState,
       verify: session.verify,
     },
@@ -153,12 +166,13 @@ const codecName = (value) => {
   return name
 }
 
-// Send the first bots in. The link carries the platform, the origin and the
-// call itself, so there is nothing else to configure.
+// Send the first bots in. The link carries the platform, origin and call;
+// Meet then draws the required identities from the configured profile pool.
 const startSession = async (body) => {
   if (session.status !== 'idle') throw new Error(`a session is already ${session.status}`)
   const target = resolveLink(body.link ?? '')
   const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
+  if (target.platform === 'meet') profiles.assertAvailable(count)
 
   const roster = new Roster({
     baseUrl: target.origin,
@@ -174,7 +188,7 @@ const startSession = async (body) => {
     screenCodec: codecName(body.screenCodec),
     size: '1920x1080',
     fps: 12,
-  })
+  }, { profileStore: profiles })
   session.roster = roster
   session.status = 'joining'
   session.startedAt = Date.now()
@@ -250,6 +264,15 @@ const batchTarget = (slug) => {
 const runAction = async (slug, action, value) => {
   const roster = session.roster
   if (!roster || session.status !== 'running') throw new Error('no running session')
+  const platform = platformById(roster.target?.platform)
+  const capabilities = platform?.capabilities
+  const label = platform?.label ?? 'this platform'
+  if (['share-on', 'share-off'].includes(action) && capabilities?.screen === false) {
+    throw new Error(`screen sharing is unavailable for ${label}`)
+  }
+  if (action === 'codec' && capabilities?.codecs === false) {
+    throw new Error(`codec controls are unavailable for ${label}`)
+  }
   // Validated before the loop: half a fleet switched and then a 400 about the
   // other half would leave no way to tell what actually happened.
   const codecArgs =
@@ -361,12 +384,43 @@ const rtcData = async (slug) => {
   return inFlight
 }
 
-export const startServer = async ({ port = 4610, open = true }) => {
+// Every mutating endpoint here does something a web page must never be able to
+// trigger: Add account opens a real Chrome window, Remove deletes a saved
+// session, Quit kills the app. None of them has ever asked who was calling, and
+// the README tells people to forward this port over SSH.
+//
+// A cross-origin fetch carrying JSON is already stopped by the preflight this
+// server does not answer; a plain <form> with enctype="text/plain" is not, and
+// that is the hole. Browsers put an Origin on every cross-origin POST, so an
+// Origin that is not local is a page, not the dashboard. No Origin at all means
+// curl, the CLI or a test — those were never the risk.
+const localCaller = (request) => {
+  const origin = request.headers.origin
+  if (!origin) return true
+  try {
+    // Any local port, not just this one: a tunnel is free to forward 4610 to
+    // whatever port it likes, and breaking that would be a worse bug.
+    const { hostname } = new URL(origin)
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]'
+  } catch {
+    return false
+  }
+}
+
+export const startServer = async ({ port = 4610, open = true, profileStore = null }) => {
+  // Sign-in completes in a Chrome window the dashboard cannot see, so the store
+  // pushes a frame the moment it does rather than making the user close Chrome
+  // and wait for the next poll.
+  profiles = profileStore ?? meetProfileStore({ onChange: () => announceProfiles() })
   let snapshots = 0
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`)
     try {
+      if (request.method !== 'GET' && !localCaller(request)) {
+        json(response, 403, { ok: false, error: 'this dashboard only takes requests from itself' })
+        return
+      }
       if (request.method === 'GET' && url.pathname === '/') {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
         response.end(readFileSync(UI_PATH))
@@ -416,12 +470,34 @@ export const startServer = async ({ port = 4610, open = true }) => {
         broadcast(await stateSnapshot())
         return
       }
+      if (request.method === 'POST' && url.pathname === '/api/meet-profiles/setup') {
+        const body = await readBody(request)
+        const profile = profiles.setup(body.id)
+        json(response, 200, { ok: true, profile })
+        broadcast(await stateSnapshot())
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/meet-profiles/verify') {
+        const body = await readBody(request)
+        const profile = await profiles.verify(body.id, { launch: probeMeetSession })
+        json(response, 200, { ok: true, profile })
+        broadcast(await stateSnapshot())
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/meet-profiles/remove') {
+        const body = await readBody(request)
+        profiles.remove(body.id)
+        json(response, 200, { ok: true })
+        broadcast(await stateSnapshot())
+        return
+      }
       if (request.method === 'POST' && url.pathname === '/api/add') {
         const body = await readBody(request)
         if (!session.roster || session.status !== 'running') {
           throw new Error('start a session first')
         }
         const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
+        if (session.roster.target?.platform === 'meet') profiles.assertAvailable(count)
         const result = await session.roster.add(count, null, {
           startCam: body.camera !== false,
           startMic: body.mic !== false,

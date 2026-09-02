@@ -203,6 +203,15 @@
   window.RTCPeerConnection = Wrapped
   if ('webkitRTCPeerConnection' in window) window.webkitRTCPeerConnection = Wrapped
 
+  // The stream monitor finds live connections by scanning outward from window,
+  // which works on an app that parks them somewhere reachable and not at all on
+  // one that keeps them in module closures — Google Meet keeps them in module
+  // closures, and the monitor reported "no connection" on a call that plainly
+  // had one. This registry already holds every connection on the page, so
+  // publishing it is the whole fix; the monitor's scan traverses a Set and
+  // matches on instanceof, so it needs nothing else from us.
+  window.__botPeerConnections__ = pcs
+
   // The one place the registry loses closed connections, so every walker
   // below sees the same live set and none can drift on what "dead" means.
   const livePcs = () => {

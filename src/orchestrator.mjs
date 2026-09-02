@@ -3,6 +3,8 @@ import { THEME_COUNT, ensureGuestFixtures, guestColorHex } from './fixtures.mjs'
 import { Guest } from './guest.mjs'
 import { plain as log } from './log.mjs'
 import { concurrencyWarning } from './machine.mjs'
+import { meetProfileStore } from './meet-profiles.mjs'
+import { platformById } from './platforms/index.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
 
 // Launching browsers is the heavy part, so it stays paced. Waiting to be
@@ -26,6 +28,24 @@ const bounded = (promise, fallback) =>
     new Promise((resolve) => setTimeout(() => resolve(fallback), PROBE_TIMEOUT)),
   ])
 
+// Meet itself always uses the account's real Google name. Cards need a local
+// suffix only when two accounts share that name, so operators can tell them
+// apart without changing either identity in the call.
+export const meetAccountLabels = (profiles, occupied = []) => {
+  const labels = new Set(occupied)
+  return profiles.map((profile, index) => {
+    const base = profile.displayName
+    let unique = base
+    let suffix = profile.accountNumber ?? index + 1
+    while (labels.has(unique)) {
+      unique = `${base} · Google ${suffix}`
+      suffix += 1
+    }
+    labels.add(unique)
+    return unique
+  })
+}
+
 const pool = async (items, worker, concurrency) => {
   const queue = [...items]
   const failures = []
@@ -46,12 +66,13 @@ const pool = async (items, worker, concurrency) => {
 
 // Holds every bot of one call and the run-owned resources behind them.
 export class Roster {
-  constructor(options) {
+  constructor(options, { profileStore = null } = {}) {
     this.options = options
     this.runId = `${new Date().toISOString().replace(/[:.]/gu, '-')}-${process.pid}`
     this.runDir = createRunDir(this.runId)
     this.options.runId = this.runId
     this.options.runDir = this.runDir
+    this.profileStore = profileStore
     this.guests = []
     this.counter = 0
     // Bots are sent in more than once — five now, seven when the call fills up.
@@ -132,7 +153,8 @@ export class Roster {
     const total = this.guests.length + count
     const warning = concurrencyWarning(total)
     if (warning) log.warn(warning)
-    const label = String(overrides?.label ?? this.options.label ?? '').trim()
+    const isMeet = this.target.platform === 'meet'
+    const label = isMeet ? '' : String(overrides?.label ?? this.options.label ?? '').trim()
 
     const users = Array.from({ length: count }, () => {
       this.counter += 1
@@ -146,12 +168,31 @@ export class Roster {
         slug: `bot-${n}`,
       }
     })
+
+    let meetProfiles = []
+    if (isMeet) {
+      this.profileStore ??= meetProfileStore()
+      meetProfiles = this.profileStore.reserveMany(
+        users.length,
+        `${this.runId}:batch-${batch.id}`,
+      )
+      const names = meetAccountLabels(meetProfiles, this.guests.map((guest) => guest.label))
+      for (let index = 0; index < users.length; index += 1) users[index].label = names[index]
+    }
     log.info(`preparing ${users.length} bot(s)`)
-    const media = await ensureGuestFixtures(users, this.options)
+    let media
+    try {
+      media = await ensureGuestFixtures(users, this.options)
+    } catch (error) {
+      for (const profile of meetProfiles) profile.release()
+      throw error
+    }
     // Every browser in a batch competes with the ones still starting, so the
     // size of the batch is part of how long anything takes.
     const options = { ...this.options, ...(overrides ?? {}), batchSize: total }
-    const guests = users.map((user) => new Guest(user, media.get(user.slug), options))
+    const guests = users.map(
+      (user, index) => new Guest(user, media.get(user.slug), options, meetProfiles[index] ?? null),
+    )
     for (const guest of guests) guest.batch = batch
     this.guests.push(...guests)
     this.#manifest()
@@ -173,13 +214,14 @@ export class Roster {
         if (this.tearingDown || batch.removed) return
         guest.log.info('launching browser')
         try {
-          await guest.start()
+          await guest.start(this.target)
           if (this.tearingDown || batch.removed) {
             await guest.teardown().catch(() => {})
             return
           }
           launched.push(guest)
         } catch (error) {
+          if (!guest.browser && !guest.context) guest.releaseProfile()
           failed(guest, error)
         }
       },
@@ -193,6 +235,7 @@ export class Roster {
           await guest.join(this.target)
           this.meetingId ??= guest.meetingId
         } catch (error) {
+          if (isMeet) await guest.closeAfterFailure().catch(() => {})
           failed(guest, error)
         }
       }),
@@ -281,12 +324,14 @@ export class Roster {
           label: guest.label,
           color: guestColorHex((guest.user.n - 1) % THEME_COUNT),
           state: guest.state,
+          waitingAdmission: guest.waitingAdmission,
           batch: guest.batch?.id ?? null,
           mic,
           cam,
           screen,
           rtc,
           codecs: guest.codecs,
+          account: guest.account,
           note: guest.note,
           lastError: guest.lastError,
         }
@@ -305,6 +350,7 @@ export class Roster {
       meetingId: this.meetingId,
       inviteLink: this.callUrl,
       platform: this.platform,
+      capabilities: platformById(this.target?.platform)?.capabilities ?? null,
       batches,
       guests,
     }

@@ -8,6 +8,7 @@ import { chromium } from 'playwright'
 
 import { resolveLink } from '../src/platforms/index.mjs'
 import aloqa from '../src/platforms/aloqa.mjs'
+import meet from '../src/platforms/meet.mjs'
 
 const results = []
 const check = (name, pass, detail = '') => {
@@ -60,10 +61,83 @@ const ALOQA_CALL = `<!doctype html><meta charset=utf-8><body>
     ${PLAYING_VIDEO}
   </script></body>`
 
+// Meet's real page keeps the pre-join controls in the document after entry and
+// only hides them, which is what makes "the first match" and "the visible
+// match" different elements. The fixture reproduces that on purpose: an adapter
+// that resolves the wrong copy stalls here exactly as it would on the real one.
+const MEET_PAGE = ({
+  joinText = 'Join now',
+  delay = 0,
+  consent = false,
+  notice = false,
+  lobby = false,
+  noDevices = false,
+  presenting = true,
+} = {}) => `<!doctype html><meta charset=utf-8><body>
+  ${consent ? '<div id="consent"><button>Reject all</button></div>' : ''}
+  ${notice ? '<div id="notice"><button>Got it</button></div>' : ''}
+  ${noDevices ? '<div id="nodev"><button>Continue without microphone and camera</button></div>' : ''}
+  <div id="preview">
+    <button data-is-muted="true" aria-label="Turn on microphone">mic</button>
+    <button data-is-muted="true" aria-label="Turn on camera">cam</button>
+    <button id="join">${joinText}</button>
+  </div>
+  <div id="lobby" hidden>Asking to be let in…</div>
+  <div id="call" hidden>
+    <button data-is-muted="true" aria-label="Turn on microphone">mic</button>
+    <button data-is-muted="true" aria-label="Turn on camera">cam</button>
+    <button aria-label="Leave call">leave</button>
+    ${presenting ? '<button id="present" aria-label="Present now">present</button>' : ''}
+    <button id="stop" aria-label="Stop presenting" hidden>stop</button>
+    <div id="menu" hidden><button>A tab</button></div>
+    <button aria-label="People 2">2</button>
+    <div data-participant-id="self" data-self-name="Google Tester"></div>
+    <div data-participant-id="remote" data-sort-key="Alice">
+      <video playsinline></video></div>
+  </div>
+  <script>
+    const show = (id, on) => { document.getElementById(id).hidden = !on }
+    for (const b of document.querySelectorAll('[data-is-muted]')) {
+      b.addEventListener('click', () =>
+        b.setAttribute('data-is-muted', b.getAttribute('data-is-muted') === 'true' ? 'false' : 'true'))
+    }
+    for (const b of document.querySelectorAll('#consent button, #notice button')) {
+      b.addEventListener('click', () => b.parentElement.remove())
+    }
+    document.getElementById('join').addEventListener('click', () => {
+      ${lobby ? "show('preview', false); show('lobby', true);" : ''}
+      setTimeout(() => {
+        show('preview', false)
+        ${lobby ? "show('lobby', false);" : ''}
+        show('call', true)
+      }, ${delay})
+    })
+    const present = document.getElementById('present')
+    if (present) present.addEventListener('click', () => show('menu', true))
+    const menuItem = document.querySelector('#menu button')
+    if (menuItem) menuItem.addEventListener('click', () => {
+      show('menu', false); show('present', false); show('stop', true)
+    })
+    document.getElementById('stop').addEventListener('click', () => {
+      show('stop', false); show('present', true)
+    })
+    document.querySelector('[aria-label="Leave call"]').addEventListener('click', () => {
+      show('call', false)
+    })
+    ${PLAYING_VIDEO}
+  </script></body>`
+
 const log = { info: () => {}, warn: () => {}, error: () => {} }
 const fail = (name, message) => { throw new Error(`${name}: ${message}`) }
 
-const drive = async (browser, { title, link, adapter, routes, expectCallId }) => {
+const drive = async (browser, {
+  title, link, adapter, routes, expectCallId,
+  expectAdmission = false,
+  // Every platform draws its own share control, so the "host forbids sharing"
+  // step has to be told which one to disable.
+  shareSel = '[data-testid="call-controls-screen-share"]',
+  shareBlocks = true,
+}) => {
   console.log(`\n${title}`)
   const context = await browser.newContext({ viewport: { width: 960, height: 540 } })
   await context.route('**/*', (route) => {
@@ -75,13 +149,21 @@ const drive = async (browser, { title, link, adapter, routes, expectCallId }) =>
   const page = await context.newPage()
   const target = resolveLink(link)
   let screenPrepared = false
-  const ctx = { page, target, displayName: 'Bot 1', log, fail, options: {},
+  const admission = []
+  const ctx = { page, target, displayName: 'Bot 1', log, fail,
+    options: { startCam: false, startMic: false },
+    meetProfile: { displayName: 'Google Tester', markNeedsSignIn: () => {} },
+    setWaitingAdmission: (waiting) => admission.push(waiting),
     prepareScreen: async () => { screenPrepared = true } }
 
   try {
     const { callId } = await adapter.join(ctx)
     check('joins the call', true)
     check('reports the call id', callId === expectCallId, `got ${JSON.stringify(callId)}`)
+    if (expectAdmission) {
+      check('reports that the account is awaiting admission',
+        admission.includes(true) && admission.at(-1) === false, JSON.stringify(admission))
+    }
 
     check('mic reads off before arming', (await adapter.micState(page)) === 'off')
     check('cam reads off before arming', (await adapter.camState(page)) === 'off')
@@ -95,12 +177,20 @@ const drive = async (browser, { title, link, adapter, routes, expectCallId }) =>
       check('setScreen(true) starts sharing', (await adapter.setScreen(ctx, true)) === 'on')
       check('a page to share is opened first', screenPrepared)
       check('setScreen(false) stops sharing', (await adapter.setScreen(ctx, false)) === 'off')
-      await page.evaluate(() =>
-        document.querySelector('[data-testid="call-controls-screen-share"]').disabled = true)
+      if (shareBlocks) {
+        await page.evaluate((sel) => { document.querySelector(sel).disabled = true }, shareSel)
+      } else {
+        // Meet does not disable the control, it removes it — an absent present
+        // button while the leave button is up IS the host's restriction.
+        await page.evaluate((sel) => { document.querySelector(sel).hidden = true }, shareSel)
+      }
       check('a call that forbids sharing reports blocked',
         (await adapter.setScreen(ctx, true)) === 'blocked')
-      await page.evaluate(() =>
-        document.querySelector('[data-testid="call-controls-screen-share"]').disabled = false)
+      await page.evaluate((sel) => {
+        const el = document.querySelector(sel)
+        el.disabled = false
+        el.hidden = false
+      }, shareSel)
     }
 
     await page.waitForTimeout(700) // let the fixture video reach readyState 2
@@ -128,16 +218,136 @@ await drive(browser, {
   routes: (path) => (path.startsWith('/guest/meeting/') ? ALOQA_CALL : ALOQA_ENTRY),
 })
 
+console.log('\nGoogle Meet link parsing')
+const meetTarget = resolveLink('https://meet.google.com/AbC-DeFg-HiJ?authuser=1')
+check('recognises a standard Meet call link',
+  meetTarget.platform === 'meet' && meetTarget.callId === 'abc-defg-hij', JSON.stringify(meetTarget))
+let invalidMeet = null
+try { resolveLink('https://meet.google.com/not-a-meeting') } catch (error) { invalidMeet = error.message }
+check('rejects a non-standard Meet path with an example',
+  /abc-defg-hij/u.test(invalidMeet ?? ''), invalidMeet ?? 'accepted')
+// Measured against live Meet, not guessed: the stream monitor reads a real
+// connection there, and neither presenting nor codec preferences do anything.
+check('declares the controls live Meet actually honours',
+  meet.capabilities.mic && meet.capabilities.camera && meet.capabilities.rtc &&
+    !meet.capabilities.screen && !meet.capabilities.codecs,
+  JSON.stringify(meet.capabilities))
+// Disabled by capability, not deleted — the implementation stays correct
+// against the DOM so re-enabling it is one boolean if Meet ever accepts a share.
+check('still implements presenting behind that switch',
+  typeof meet.screenState === 'function' && typeof meet.setScreen === 'function')
+const aliasTarget = resolveLink('https://meet.google.com/lookup/AbCd1234?pli=1')
+check('recognises a nicknamed Meet link',
+  aliasTarget.platform === 'meet' && aliasTarget.callId === 'AbCd1234',
+  JSON.stringify(aliasTarget))
+const scoped = resolveLink('https://meet.google.com/u/0/abc-defg-hij')
+check('follows an account-scoped Meet link', scoped.callId === 'abc-defg-hij', JSON.stringify(scoped))
+check('pins the language and the account in the URL it opens',
+  /[?&]hl=en/u.test(scoped.url) && /[?&]authuser=0/u.test(scoped.url), scoped.url)
+
+await drive(browser, {
+  title: 'Google Meet — direct entry',
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  expectCallId: 'abc-defg-hij',
+  shareSel: '#present',
+  shareBlocks: false,
+  routes: () => MEET_PAGE({ joinText: 'Join now' }),
+})
+
+await drive(browser, {
+  title: 'Google Meet — lobby admission',
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  expectCallId: 'abc-defg-hij',
+  expectAdmission: true,
+  shareSel: '#present',
+  shareBlocks: false,
+  routes: () => MEET_PAGE({ joinText: 'Ask to join', delay: 400, lobby: true }),
+})
+
+// A first sign-in meets both of these before it ever sees a join button, and
+// they sit on top of it — an adapter that does not clear them never gets in.
+await drive(browser, {
+  title: 'Google Meet — consent banner and onboarding notice',
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  expectCallId: 'abc-defg-hij',
+  shareSel: '#present',
+  shareBlocks: false,
+  routes: () => MEET_PAGE({ joinText: 'Join now', consent: true, notice: true }),
+})
+
+// --- Meet in-call details ---------------------------------------------------
+// Two things the join drives above cannot reach: a control the host has taken
+// away, and a page that only LOOKS like a call.
+{
+  console.log('\nGoogle Meet — in-call details')
+  const context = await browser.newContext({ viewport: { width: 960, height: 540 } })
+  await context.route('**/*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: `<!doctype html><meta charset=utf-8><body>
+        <div id="left">
+          <button aria-label="Leave call" hidden>leave</button>
+          <div data-participant-id="ghost" data-sort-key="Alice"><video playsinline></video></div>
+        </div>
+        <div id="call" hidden>
+          <button data-is-muted="true" aria-label="Turn on microphone" aria-disabled="true">mic</button>
+          <button data-is-muted="false" aria-label="Turn off camera">cam</button>
+          <button aria-label="Leave call">leave</button>
+          <div data-participant-id="self" data-self-name="Google Tester"></div>
+        </div></body>`,
+    }))
+  const page = await context.newPage()
+  await page.goto('https://meet.google.com/abc-defg-hij')
+
+  // The post-call screen keeps a hidden leave button around. Treating its mere
+  // presence as proof resurrects a bot that is not in the call at all, and
+  // recoverIfAdmitted then flips a genuine failure back to "in call".
+  const ghost = await meet.remote(page)
+  check('a hidden leave button is not proof of being in the call', ghost.local === 0,
+    JSON.stringify(ghost))
+
+  await page.evaluate(() => { document.getElementById('call').hidden = false })
+  const inCall = await meet.remote(page)
+  check('a visible leave button stands in for a virtualised self tile', inCall.local === 1,
+    JSON.stringify(inCall))
+
+  // A host who has taken the microphone away leaves a control that looks
+  // clickable. Blind-clicking it reports success for a bot that is still muted.
+  check('a host-restricted microphone reads as request',
+    (await meet.micState(page)) === 'request')
+  check('and is never blind-clicked',
+    (await meet.setMic({ page, log }, true)) === 'request')
+  check('the camera beside it still reads normally', (await meet.camState(page)) === 'on')
+  await context.close()
+}
+
 // --- refusals ---------------------------------------------------------------
 // The message a bot fails with is what the user acts on, so it is worth
 // pinning down too.
-const expectFailure = async (title, { link, adapter, body, expect }) => {
+const expectFailure = async (title, { link, adapter, body, expect, within = 10 }) => {
   console.log(`\n${title}`)
   const context = await browser.newContext({ viewport: { width: 960, height: 540 } })
   await context.route('**/*', (route) =>
     route.fulfill({ status: 200, contentType: 'text/html', body }))
   const page = await context.newPage()
-  const ctx = { page, target: resolveLink(link), displayName: 'Bot 1', log, fail, options: {} }
+  let markedSignedOut = false
+  const ctx = {
+    page,
+    target: resolveLink(link),
+    displayName: 'Bot 1',
+    log,
+    fail,
+    options: { startCam: false, startMic: false },
+    meetProfile: {
+      displayName: 'Google Tester',
+      markNeedsSignIn: () => { markedSignedOut = true },
+    },
+    setWaitingAdmission: () => {},
+  }
   let message = null
   const started = Date.now()
   try {
@@ -150,7 +360,10 @@ const expectFailure = async (title, { link, adapter, body, expect }) => {
     message ?? 'it joined instead of failing')
   // The refusal is on screen within a second. Waiting out a join timeout before
   // reading it leaves the bot claiming to be joining while the page says no.
-  check('reports the refusal promptly', seconds < 10, `took ${seconds.toFixed(1)}s`)
+  check('reports the refusal promptly', seconds < within, `took ${seconds.toFixed(1)}s`)
+  if (/signed out/iu.test(message ?? '')) {
+    check('marks the saved profile as needing sign-in', markedSignedOut)
+  }
   await context.close()
 }
 
@@ -160,6 +373,59 @@ await expectFailure('Aloqa — join refused', {
   body: `<!doctype html><meta charset=utf-8><body>
     <div data-testid="guest-join-blocked">This invite link has expired</div></body>`,
   expect: /join refused: This invite link has expired/u,
+})
+
+await expectFailure('Google Meet — signed out', {
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  body: '<!doctype html><body><input aria-label="Enter your name"></body>',
+  expect: /signed out.*reconnect/iu,
+})
+
+// Accepting Meet's offer puts a bot in the call publishing nothing at all —
+// the exact failure this app exists to make visible. It must be recognised, and
+// it must never be clicked.
+await expectFailure('Google Meet — offered a call with no devices', {
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  body: `<!doctype html><body>
+    <div><button>Continue without microphone and camera</button></div>
+    <button data-is-muted="true" aria-label="Turn on microphone">mic</button>
+    <button id="join">Join now</button></body>`,
+  expect: /no camera or microphone/iu,
+})
+
+// Meet renders in the ACCOUNT's language, which overrides the hl in the link.
+// A page with Meet's device toggles and none of its English controls is a
+// language problem, and saying so beats timing out on a selector.
+await expectFailure('Google Meet — account is not in English', {
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  body: `<!doctype html><body>
+    <button data-is-muted="true" aria-label="microphone">mic</button>
+    <button data-is-muted="true" aria-label="camera">cam</button>
+    <button>Rejoindre maintenant</button></body>`,
+  expect: /not in English/iu,
+  within: 30,
+})
+
+await expectFailure('Google Meet — removed from the call', {
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  body: `<!doctype html><body>You've been removed from the meeting</body>`,
+  expect: /refused this account.*removed/iu,
+})
+
+await expectFailure('Google Meet — admission refused', {
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  body: `<!doctype html><body>
+    <button id="join">Ask to join</button>
+    <div id="refused" hidden>You can't join this video call</div>
+    <script>document.getElementById('join').onclick = () => {
+      document.getElementById('refused').hidden = false
+    }</script></body>`,
+  expect: /Google Meet refused this account: You can't join this video call/iu,
 })
 
 await browser.close()

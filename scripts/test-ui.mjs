@@ -48,6 +48,7 @@ const state = (status, session = null, extra = {}) => ({
   browserReady: true,
   browserInstalling: false,
   browserProgress: null,
+  meetProfiles: { profiles: [], available: 0, chromeReady: true },
   session,
   verify: null,
   ...extra,
@@ -68,6 +69,7 @@ const roster = (states, sizes = [states.length]) => {
     meetingId: 'mtg-abc123',
     inviteLink: 'https://aloqa.test/join/AbCdEfGhIjKlMnOpQrSt',
     platform: 'Aloqa',
+    capabilities: { mic: true, camera: true, screen: true, rtc: true, codecs: true },
     batches: sizes.map((size, i) => ({ id: i + 1, at: 1_755_000_000_000 + i * 60_000, size })),
     guests: states.map((guestState, i) => ({
       index: i,
@@ -90,6 +92,40 @@ const roster = (states, sizes = [states.length]) => {
     })),
   }
 }
+
+const meetProfilesState = {
+  profiles: [
+    { id: '11111111-1111-4111-8111-111111111111', displayName: 'Meet Tester', number: 1, status: 'ready' },
+    { id: '22222222-2222-4222-8222-222222222222', displayName: 'Meet Tester', number: 2, status: 'ready' },
+  ],
+  available: 2,
+  chromeReady: true,
+}
+
+const meetRoster = (guestState = 'in-call', waitingAdmission = false) => ({
+  meetingId: 'abc-defg-hij',
+  inviteLink: 'https://meet.google.com/abc-defg-hij?hl=en',
+  platform: 'Google Meet',
+  capabilities: { mic: true, camera: true, screen: false, rtc: true, codecs: false },
+  batches: [{ id: 1, at: 1_755_000_000_000, size: 1 }],
+  guests: [{
+    index: 0,
+    slug: 'bot-1',
+    label: 'Meet Tester',
+    color: '#00e5ff',
+    state: guestState,
+    waitingAdmission,
+    batch: 1,
+    mic: guestState === 'in-call' ? 'on' : null,
+    cam: guestState === 'in-call' ? 'on' : null,
+    screen: null,
+    rtc: null,
+    codecs: { audio: null, video: null, screen: null },
+    account: { id: meetProfilesState.profiles[0].id, displayName: 'Meet Tester', accountNumber: 1 },
+    note: null,
+    lastError: null,
+  }],
+})
 
 // What /api/rtc/<slug> serves: the sanitized stream model read out of a bot's
 // page, one row per RTP stream, names joined in-page. `limit` on the video
@@ -159,6 +195,9 @@ try {
 
   const stops = []
   const actions = []
+  const profileSetups = []
+  const profileRemovals = []
+  const profileVerifies = []
   await context.route('**/*', (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -175,6 +214,22 @@ try {
     if (request.method() === 'POST' && path === '/api/stop') {
       stops.push(path)
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    }
+    if (request.method() === 'POST' && path === '/api/meet-profiles/setup') {
+      profileSetups.push(request.postDataJSON())
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    }
+    if (request.method() === 'POST' && path === '/api/meet-profiles/remove') {
+      profileRemovals.push(request.postDataJSON())
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    }
+    if (request.method() === 'POST' && path === '/api/meet-profiles/verify') {
+      profileVerifies.push(request.postDataJSON())
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: '{"ok":true,"profile":{"status":"needs-sign-in"}}',
+      })
     }
     if (request.method() === 'POST' && path === '/api/action') {
       actions.push(request.postDataJSON())
@@ -236,7 +291,120 @@ try {
   check('Send bots is offered', (await goBtn.textContent()) === 'Send bots')
   check('Send bots is enabled', !(await goBtn.isDisabled()))
   check('no all-bots bar', !(await page.locator('#allbar').isVisible()))
+
+  console.log('\nGoogle Meet stays out of the way until it is asked for')
+  // Meet is a rare platform. The rule this section defends is that a dashboard
+  // doing Aloqa work contains no Meet pixels at all.
+  await push(state('idle', null, { meetProfiles: meetProfilesState }))
+  check('an empty link shows nothing about Meet',
+    !(await page.locator('#meetBar').isVisible()))
   await page.locator('#link').fill('https://aloqa.test/join/AbCdEfGhIjKlMnOpQrSt')
+  check('an Aloqa link shows nothing about Meet',
+    !(await page.locator('#meetBar').isVisible()))
+  check('and no Google accounts button sits in the header',
+    (await page.locator('header #accountsBtn').count()) === 0)
+
+  await page.locator('#link').fill('https://meet.google.com/abc-defg-hij')
+  check('a Meet link is detected before starting',
+    (await page.locator('#platformPill').textContent()) === 'Platform Google Meet')
+  check('and only then does one line about accounts appear',
+    await page.locator('#meetBar').isVisible() &&
+      (await page.locator('#meetBarText').textContent()).includes('2 account'),
+    await page.locator('#meetBarText').textContent())
+  await page.setViewportSize({ width: 980, height: 800 })
+  check('the header fits the app window at its minimum width',
+    await page.locator('header').evaluate((header) => header.scrollWidth <= header.clientWidth),
+    await page.locator('header').evaluate((header) => `${header.scrollWidth}/${header.clientWidth}`))
+  await page.setViewportSize({ width: 1280, height: 800 })
+  check('Meet hides the label its accounts own, and the codecs it cannot honour',
+    !(await page.locator('#labelField').isVisible()) &&
+      !(await page.locator('#codecToggle').isVisible()))
+  await page.locator('#count').fill('3')
+  check('a Meet batch larger than account capacity is blocked before sending',
+    await goBtn.isDisabled())
+  check('and the strip says how far short it is',
+    (await page.locator('#meetBarText').textContent()).includes('3') &&
+      (await page.locator('#meetBar').getAttribute('class')).includes('-short'),
+    await page.locator('#meetBarText').textContent())
+  await page.locator('#count').fill('2')
+  check('enough ready profiles enable the Meet send', !(await goBtn.isDisabled()))
+
+  await page.locator('#meetBar #accountsBtn').click()
+  check('the Google Accounts panel lists safe display names and statuses',
+    await page.locator('#accountsModal').isVisible() &&
+      (await page.locator('#accountList .account').count()) === 2 &&
+      (await page.locator('#accountList').textContent()).includes('Meet Tester') &&
+      !(await page.locator('#accountList').textContent()).includes('@'))
+  // A saved session Google has since expired is indistinguishable from a live
+  // one until something asks. Check is what asks, before a batch does.
+  const verifyRequest = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/api/meet-profiles/verify'),
+  )
+  await page.locator('#accountList [data-check]').first().click()
+  await verifyRequest
+  const verdict = await page
+    .locator('.toast.-warn', { hasText: 'needs signing in again' })
+    .first()
+    .textContent()
+    .catch(() => null)
+  check('Check asks about the selected account and reports what came back',
+    profileVerifies[0]?.id === meetProfilesState.profiles[0].id && Boolean(verdict),
+    `${JSON.stringify(profileVerifies[0])} ${verdict ?? 'no verdict shown'}`)
+
+  const reconnectRequest = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/api/meet-profiles/setup'),
+  )
+  await page.locator('#accountList [data-connect]').first().click()
+  await reconnectRequest
+  check('Reconnect targets the selected app-owned profile',
+    profileSetups[0]?.id === meetProfilesState.profiles[0].id, JSON.stringify(profileSetups[0]))
+  await push(state('idle', null, { meetProfiles: meetProfilesState }))
+  page.once('dialog', (dialog) => dialog.accept())
+  const removeRequest = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/api/meet-profiles/remove'),
+  )
+  await page.locator('#accountList [data-remove]').nth(1).click()
+  await removeRequest
+  check('Remove targets only the selected saved local profile',
+    profileRemovals[0]?.id === meetProfilesState.profiles[1].id, JSON.stringify(profileRemovals[0]))
+  await page.locator('#accountsClose').click()
+
+  const meetInUse = {
+    ...meetProfilesState,
+    profiles: meetProfilesState.profiles.map((profile) => ({ ...profile, status: 'in-use' })),
+    available: 0,
+  }
+  await push(state('joining', meetRoster('joining', true), { meetProfiles: meetInUse }))
+  check('Meet cards use the Google account display name',
+    (await page.locator('.card .who .nm').textContent()) === 'Meet Tester' &&
+      (await page.locator('.card [data-account]').textContent()) === 'Google account 1')
+  check('Meet keeps mic, camera, leave, and Stop available while awaiting admission',
+    await page.locator('.card [data-act=mic]').isVisible() &&
+      await page.locator('.card [data-act=cam]').isVisible() &&
+      await page.locator('.card [data-act=leave]').isVisible() && await stopBtn.isVisible())
+  // The monitor is the point of the parity work — it is what the camera
+  // watchdog reads. Presenting is the one thing live Meet refuses.
+  check('Meet cards carry the stream monitor and hide only screen sharing',
+    await page.locator('.card [data-rtc-toggle]').isVisible() &&
+      !(await page.locator('.card [data-act=share]').isVisible()))
+  check('the dashboard notifies the user about lobby admission',
+    (await page.locator('.toast.-warn').allTextContents()).some((text) => text.includes('awaiting admission')))
+  await push(state('running', meetRoster(), { meetProfiles: meetInUse }))
+  check('Meet keeps the fleet mic and camera controls, without share or codecs',
+    await page.locator('#allbar').isVisible() &&
+      await page.locator('#allbar [data-all=mute]').isVisible() &&
+      await page.locator('#allbar [data-all=cam-off]').isVisible() &&
+      !(await page.locator('#allbar [data-capability=screen]').isVisible()) &&
+      !(await page.locator('#allbar [data-capability=codecs]').isVisible()))
+  check('no unused Meet account means another batch is blocked', await goBtn.isDisabled())
+
+  await push(state('idle', null, { meetProfiles: meetProfilesState }))
+  await page.locator('#count').fill('2')
+  await page.locator('#link').fill('https://aloqa.test/join/AbCdEfGhIjKlMnOpQrSt')
+  check('switching back to Aloqa restores its label and puts Meet away again',
+    await page.locator('#labelField').isVisible() &&
+      await page.locator('#codecToggle').isVisible() &&
+      !(await page.locator('#meetBar').isVisible()))
   await page.locator('#botLabel').fill('  Mahmud  ')
   check('the send codecs stay out of the way until asked for',
     !(await page.locator('#joinCodecs').isVisible()))
