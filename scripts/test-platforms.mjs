@@ -73,7 +73,9 @@ const MEET_PAGE = ({
   lobby = false,
   noDevices = false,
   presenting = true,
+  askName = false,
 } = {}) => `<!doctype html><meta charset=utf-8><body>
+  ${askName ? '<div id="namebox"><input aria-label="Your name"></div>' : ''}
   ${consent ? '<div id="consent"><button>Reject all</button></div>' : ''}
   ${notice ? '<div id="notice"><button>Got it</button></div>' : ''}
   ${noDevices ? '<div id="nodev"><button>Continue without microphone and camera</button></div>' : ''}
@@ -103,6 +105,18 @@ const MEET_PAGE = ({
     }
     for (const b of document.querySelectorAll('#consent button, #notice button')) {
       b.addEventListener('click', () => b.parentElement.remove())
+    }
+    // Meet shows the name field first and the join control only once it has a
+    // name, which is what makes the guest path two steps rather than one.
+    const nameBox = document.getElementById('namebox')
+    if (nameBox) {
+      const field = nameBox.querySelector('input')
+      document.getElementById('preview').hidden = true
+      field.addEventListener('input', () => {
+        const named = field.value.trim().length > 0
+        nameBox.hidden = named
+        document.getElementById('preview').hidden = !named
+      })
     }
     document.getElementById('join').addEventListener('click', () => {
       ${lobby ? "show('preview', false); show('lobby', true);" : ''}
@@ -137,6 +151,7 @@ const drive = async (browser, {
   // step has to be told which one to disable.
   shareSel = '[data-testid="call-controls-screen-share"]',
   shareBlocks = true,
+  asGuest = false,
 }) => {
   console.log(`\n${title}`)
   const context = await browser.newContext({ viewport: { width: 960, height: 540 } })
@@ -152,7 +167,10 @@ const drive = async (browser, {
   const admission = []
   const ctx = { page, target, displayName: 'Bot 1', log, fail,
     options: { startCam: false, startMic: false },
-    meetProfile: { displayName: 'Google Tester', markNeedsSignIn: () => {} },
+    // A guest bot is exactly one that was handed no profile.
+    meetProfile: asGuest
+      ? null
+      : { displayName: 'Google Tester', markNeedsSignIn: () => {} },
     setWaitingAdmission: (waiting) => admission.push(waiting),
     prepareScreen: async () => { screenPrepared = true } }
 
@@ -266,6 +284,20 @@ await drive(browser, {
   routes: () => MEET_PAGE({ joinText: 'Ask to join', delay: 400, lobby: true }),
 })
 
+// The whole point of a guest: no Google account anywhere. It types a name and
+// waits for the host, exactly as an Aloqa guest does.
+await drive(browser, {
+  title: 'Google Meet — anonymous guest',
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  expectCallId: 'abc-defg-hij',
+  expectAdmission: true,
+  asGuest: true,
+  shareSel: '#present',
+  shareBlocks: false,
+  routes: () => MEET_PAGE({ joinText: 'Ask to join', delay: 400, lobby: true, askName: true }),
+})
+
 // A first sign-in meets both of these before it ever sees a join button, and
 // they sit on top of it — an adapter that does not clear them never gets in.
 await drive(browser, {
@@ -328,7 +360,7 @@ await drive(browser, {
 // --- refusals ---------------------------------------------------------------
 // The message a bot fails with is what the user acts on, so it is worth
 // pinning down too.
-const expectFailure = async (title, { link, adapter, body, expect, within = 10 }) => {
+const expectFailure = async (title, { link, adapter, body, expect, within = 10, asGuest = false }) => {
   console.log(`\n${title}`)
   const context = await browser.newContext({ viewport: { width: 960, height: 540 } })
   await context.route('**/*', (route) =>
@@ -342,10 +374,12 @@ const expectFailure = async (title, { link, adapter, body, expect, within = 10 }
     log,
     fail,
     options: { startCam: false, startMic: false },
-    meetProfile: {
-      displayName: 'Google Tester',
-      markNeedsSignIn: () => { markedSignedOut = true },
-    },
+    meetProfile: asGuest
+      ? null
+      : {
+          displayName: 'Google Tester',
+          markNeedsSignIn: () => { markedSignedOut = true },
+        },
     setWaitingAdmission: () => {},
   }
   let message = null
@@ -407,6 +441,26 @@ await expectFailure('Google Meet — account is not in English', {
     <button>Rejoindre maintenant</button></body>`,
   expect: /not in English/iu,
   within: 30,
+})
+
+// Meet turns anonymous visitors away from any meeting a personal Google
+// account created, and it does so with the same words it uses for a blocked
+// account. A guest told to "reconnect its account" would be nonsense.
+await expectFailure('Google Meet — a meeting that takes no guests', {
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  asGuest: true,
+  body: `<!doctype html><body>You can't join this video call
+    <button>Return to home screen</button></body>`,
+  expect: /does not take guests[\s\S]*personal Google account/iu,
+})
+
+await expectFailure('Google Meet — a guest asked to sign in', {
+  link: 'https://meet.google.com/abc-defg-hij',
+  adapter: meet,
+  asGuest: true,
+  body: '<!doctype html><body>Sign in to join this call</body>',
+  expect: /does not take guests/iu,
 })
 
 await expectFailure('Google Meet — removed from the call', {

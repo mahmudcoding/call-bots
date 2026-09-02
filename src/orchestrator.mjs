@@ -31,6 +31,10 @@ const bounded = (promise, fallback) =>
 // Meet itself always uses the account's real Google name. Cards need a local
 // suffix only when two accounts share that name, so operators can tell them
 // apart without changing either identity in the call.
+// 'account' only when explicitly asked for: a Meet run needs no setup at all
+// unless somebody wants the bots to carry real Google identities.
+export const meetMode = (value) => (value === 'account' ? 'account' : 'guest')
+
 export const meetAccountLabels = (profiles, occupied = []) => {
   const labels = new Set(occupied)
   return profiles.map((profile, index) => {
@@ -153,8 +157,12 @@ export class Roster {
     const total = this.guests.length + count
     const warning = concurrencyWarning(total)
     if (warning) log.warn(warning)
+    // Meet takes bots either way: as saved Google accounts, or as anonymous
+    // guests that type a name and wait to be admitted. Only the account path
+    // needs an identity pool, and only it overrides the bot's label.
     const isMeet = this.target.platform === 'meet'
-    const label = isMeet ? '' : String(overrides?.label ?? this.options.label ?? '').trim()
+    const useAccounts = isMeet && meetMode(overrides?.meetMode ?? this.options.meetMode) === 'account'
+    const label = useAccounts ? '' : String(overrides?.label ?? this.options.label ?? '').trim()
 
     const users = Array.from({ length: count }, () => {
       this.counter += 1
@@ -170,7 +178,7 @@ export class Roster {
     })
 
     let meetProfiles = []
-    if (isMeet) {
+    if (useAccounts) {
       this.profileStore ??= meetProfileStore()
       meetProfiles = this.profileStore.reserveMany(
         users.length,
@@ -235,7 +243,7 @@ export class Roster {
           await guest.join(this.target)
           this.meetingId ??= guest.meetingId
         } catch (error) {
-          if (isMeet) await guest.closeAfterFailure().catch(() => {})
+          if (useAccounts) await guest.closeAfterFailure().catch(() => {})
           failed(guest, error)
         }
       }),
@@ -350,6 +358,7 @@ export class Roster {
       meetingId: this.meetingId,
       inviteLink: this.callUrl,
       platform: this.platform,
+      meetMode: meetMode(this.options.meetMode),
       capabilities: platformById(this.target?.platform)?.capabilities ?? null,
       batches,
       guests,

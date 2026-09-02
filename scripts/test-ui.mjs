@@ -106,6 +106,7 @@ const meetRoster = (guestState = 'in-call', waitingAdmission = false) => ({
   meetingId: 'abc-defg-hij',
   inviteLink: 'https://meet.google.com/abc-defg-hij?hl=en',
   platform: 'Google Meet',
+  meetMode: 'account',
   capabilities: { mic: true, camera: true, screen: false, rtc: true, codecs: false },
   batches: [{ id: 1, at: 1_755_000_000_000, size: 1 }],
   guests: [{
@@ -307,16 +308,32 @@ try {
   await page.locator('#link').fill('https://meet.google.com/abc-defg-hij')
   check('a Meet link is detected before starting',
     (await page.locator('#platformPill').textContent()) === 'Platform Google Meet')
-  check('and only then does one line about accounts appear',
-    await page.locator('#meetBar').isVisible() &&
-      (await page.locator('#meetBarText').textContent()).includes('2 account'),
+  check('and only then does one line about Meet appear',
+    await page.locator('#meetBar').isVisible())
+
+  // Guests are the default because they need nothing set up. A dashboard with
+  // no Google account configured at all must still be able to send Meet bots.
+  check('it offers guests first, with nothing to manage',
+    (await page.locator('[data-meet-mode=guest]').getAttribute('aria-pressed')) === 'true' &&
+      !(await page.locator('#accountsBtn').isVisible()) &&
+      (await page.locator('#meetBarText').textContent()).includes('no setup'),
+    await page.locator('#meetBarText').textContent())
+  check('a guest batch is sendable however many accounts exist',
+    !(await goBtn.isDisabled()))
+  check('and a guest keeps the custom label an account bot cannot have',
+    await page.locator('#labelField').isVisible())
+
+  await page.locator('[data-meet-mode=account]').click()
+  check('choosing accounts brings out the readiness count and Manage',
+    (await page.locator('#meetBarText').textContent()).includes('2 account') &&
+      await page.locator('#accountsBtn').isVisible(),
     await page.locator('#meetBarText').textContent())
   await page.setViewportSize({ width: 980, height: 800 })
   check('the header fits the app window at its minimum width',
     await page.locator('header').evaluate((header) => header.scrollWidth <= header.clientWidth),
     await page.locator('header').evaluate((header) => `${header.scrollWidth}/${header.clientWidth}`))
   await page.setViewportSize({ width: 1280, height: 800 })
-  check('Meet hides the label its accounts own, and the codecs it cannot honour',
+  check('an account bot loses the label it cannot use, and the codecs Meet ignores',
     !(await page.locator('#labelField').isVisible()) &&
       !(await page.locator('#codecToggle').isVisible()))
   await page.locator('#count').fill('3')
@@ -400,6 +417,7 @@ try {
 
   await push(state('idle', null, { meetProfiles: meetProfilesState }))
   await page.locator('#count').fill('2')
+  await page.locator('[data-meet-mode=guest]').click()
   await page.locator('#link').fill('https://aloqa.test/join/AbCdEfGhIjKlMnOpQrSt')
   check('switching back to Aloqa restores its label and puts Meet away again',
     await page.locator('#labelField').isVisible() &&

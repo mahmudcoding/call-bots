@@ -182,9 +182,12 @@ try {
     check('the state exposes a sanitized empty Meet profile list',
       Array.isArray(current.meetProfiles?.profiles) && current.meetProfiles.available === 0 &&
         !JSON.stringify(current.meetProfiles).includes(process.env.CALL_BOTS_HOME))
+    // Only the account path needs an identity pool. Asking for it without one
+    // must fail before anything is launched.
     const refused = await post('/api/start', {
       link: 'https://meet.google.com/abc-defg-hij',
       guests: 1,
+      meetMode: 'account',
     })
     check('a Meet start without enough accounts is actionable',
       refused.ok === false && /Add or reconnect accounts/iu.test(refused.error ?? ''),

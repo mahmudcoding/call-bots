@@ -9,7 +9,7 @@ import { bundledChromiumPath, probeMeetSession, systemChromePath } from './brows
 import { onLog, plain as log } from './log.mjs'
 import { machineProfile, systemUsage } from './machine.mjs'
 import { meetProfileStore } from './meet-profiles.mjs'
-import { Roster } from './orchestrator.mjs'
+import { Roster, meetMode } from './orchestrator.mjs'
 import { platformById, resolveLink } from './platforms/index.mjs'
 
 const UI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'ui.html')
@@ -172,10 +172,12 @@ const startSession = async (body) => {
   if (session.status !== 'idle') throw new Error(`a session is already ${session.status}`)
   const target = resolveLink(body.link ?? '')
   const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
-  if (target.platform === 'meet') profiles.assertAvailable(count)
+  const mode = meetMode(body.meetMode)
+  if (target.platform === 'meet' && mode === 'account') profiles.assertAvailable(count)
 
   const roster = new Roster({
     baseUrl: target.origin,
+    meetMode: mode,
     headed: false,
     browser: 'auto',
     noVideo: Boolean(body.noVideo),
@@ -497,7 +499,9 @@ export const startServer = async ({ port = 4610, open = true, profileStore = nul
           throw new Error('start a session first')
         }
         const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
-        if (session.roster.target?.platform === 'meet') profiles.assertAvailable(count)
+        if (session.roster.target?.platform === 'meet' && session.roster.options.meetMode === 'account') {
+          profiles.assertAvailable(count)
+        }
         const result = await session.roster.add(count, null, {
           startCam: body.camera !== false,
           startMic: body.mic !== false,

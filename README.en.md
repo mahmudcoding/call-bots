@@ -42,15 +42,27 @@ to localhost, so on a server reach it through a tunnel:
 ssh -L 4610:127.0.0.1:4610 <user>@<server>
 ```
 
-## Google Meet accounts
+## Google Meet
 
 Meet is a rare guest here, so it stays out of sight: paste a
 `https://meet.google.com/abc-defg-hij` link and one line appears under the link
-field saying how many accounts are ready. With an Aloqa link, or none, the
-dashboard says nothing about Meet at all.
+field. With an Aloqa link, or none, the dashboard says nothing about Meet at all.
 
-Each concurrent Meet bot needs its own Google account, and Google Chrome must be
-installed. **Manage → Add account** opens Chrome on an isolated Call Bots
+That line offers the two ways in. **Guests** is the default and needs nothing at
+all: each bot opens the meeting, types its name and waits for you to admit it,
+exactly as an Aloqa guest does. Terminal: that is what `join` already does.
+
+The catch is Google's, not ours: **Meet refuses anonymous visitors for any
+meeting created by a personal Google account** — no name field, just "You can't
+join this video call", and that holds even while the host is sitting in the
+call. Only a Workspace meeting can take guests, and only if its admin allows it.
+For everything else, use accounts.
+
+## Google Meet accounts
+
+**Google accounts** is the other half of that switch, and the one that always
+works. Each concurrent Meet bot needs its own Google account, and Google Chrome
+must be installed. Terminal: `--as account`. **Manage → Add account** opens Chrome on an isolated Call Bots
 profile — sign in there and the row confirms it while the window is still open;
 close that window and the account turns Ready. **Check** reopens a saved profile
 quietly and reports whether Google still accepts it, so a session that has

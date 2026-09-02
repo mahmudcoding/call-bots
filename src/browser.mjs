@@ -132,6 +132,8 @@ const meetLaunchIgnores = () =>
 // so distinct media needs distinct processes. Aloqa contexts are always fresh
 // and anonymous; Meet deliberately reopens the one isolated signed-in profile
 // reserved for that bot.
+const onMeet = (options) => String(options?.baseUrl ?? '').includes('meet.google.com')
+
 export const launchGuest = async (guest, media, options, codecs = null, meetProfile = null) => {
   const args = buildArgs(guest, media, options)
   const headless = !options.headed
@@ -143,7 +145,10 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
     // it. Everything else about a bot is unaffected by the larger surface: its
     // camera comes from a file, not from rendering.
     viewport: { width: 1920, height: 1080 },
-    ...(meetProfile ? { locale: 'en-US' } : {}),
+    // Meet's controls are read in English, and for a signed-OUT guest the
+    // browser locale is what decides the language — hl in the link only wins
+    // once there is no account preference to override it.
+    ...(meetProfile || onMeet(options) ? { locale: 'en-US' } : {}),
   }
 
   let browser = null
@@ -164,6 +169,7 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
       })
       browser = context.browser()
     } else {
+      if (onMeet(options)) args.push('--lang=en-US')
       const primary = resolveChannel(options.browser)
       try {
         browser = await chromium.launch({ channel: primary, headless, args })

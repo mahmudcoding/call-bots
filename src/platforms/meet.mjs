@@ -1,5 +1,14 @@
-// Google Meet — authenticated browser-profile join. Each bot owns one isolated
-// Chrome profile that the user signed into manually through Call Bots.
+// Google Meet — two ways in.
+//
+// A bot with a saved Chrome profile joins as that Google account. A bot without
+// one joins as an anonymous guest: it types a name and asks to be let in, the
+// way Aloqa guests do, and needs no account at all.
+//
+// Guests are not always allowed. Meet refuses anonymous visitors outright for
+// any meeting created by a PERSONAL Google account — no name field, just "You
+// can't join this video call", and that holds even while the host is sitting in
+// the call. Workspace meetings can permit them if the admin has. The adapter
+// says which of those happened rather than leaving a bot to time out.
 //
 // Meet has no test ids and re-renders constantly, so this adapter never walks a
 // fixed script. It reads the page once per tick — one evaluate, one forced
@@ -62,9 +71,11 @@ export const capabilities = Object.freeze({
 })
 
 export const SEL = {
-  // A signed-in profile is never asked for a name, so this field appearing IS
-  // the signed-out signal — it is never filled.
-  anonymousName: 'input[aria-label*="your name" i], input[placeholder*="your name" i]',
+  // A guest types a name here; a signed-in profile is never asked for one, so
+  // for an account bot this field appearing IS the signed-out signal. The bare
+  // text input is a last resort — Meet's pre-join screen has no other one.
+  anonymousName:
+    'input[aria-label*="your name" i], input[placeholder*="your name" i], input[type="text"]',
   leaveButton: '[aria-label*="Leave call" i], [aria-label*="Leave the call" i]',
   // data-is-muted is the reliable seam and is preferred when present; the
   // aria-label fallbacks cover surfaces Meet renders without it.
@@ -260,7 +271,7 @@ const looksNonEnglish = (read) =>
 // user looking at the adapter instead of at their meeting code.
 const HOME_PATH = /^\/(?:u\/\d+\/)?(?:home)?$/u
 
-const classify = (read, url) => {
+const classify = (read, url, guest) => {
   if (read.leave) return { stage: 'in-call' }
 
   let host = ''
@@ -271,6 +282,9 @@ const classify = (read, url) => {
     path = parsed.pathname
   } catch {}
   if (host === 'accounts.google.com') return { stage: 'signin' }
+  // The same field means opposite things to the two kinds of bot: a guest is
+  // being asked to introduce itself, an account bot has lost its session.
+  if (read.nameField) return { stage: guest ? 'name-entry' : 'signin' }
   if (host === 'meet.google.com' && HOME_PATH.test(path)) {
     return {
       stage: 'refused',
@@ -278,7 +292,7 @@ const classify = (read, url) => {
         'or invite this account to the meeting',
     }
   }
-  if (read.nameField || SIGNED_OUT.test(plain(read.headline))) return { stage: 'signin' }
+  if (SIGNED_OUT.test(plain(read.headline))) return { stage: 'signin' }
 
   const refusal = refusalIn(read.headline)
   if (refusal) return { stage: 'refused', detail: refusal }
@@ -425,6 +439,12 @@ const setScreen = async (ctx, on) => {
 // ---------------------------------------------------------------------------
 // Join.
 
+const typeName = async (page, displayName) =>
+  onScreen(page, SEL.anonymousName)
+    .fill(String(displayName ?? '').slice(0, 60), { timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false)
+
 const failSignedOut = async ({ meetProfile, fail }) => {
   meetProfile?.markNeedsSignIn?.()
   const name = meetProfile?.displayName ?? 'This Google account'
@@ -435,8 +455,16 @@ const failSignedOut = async ({ meetProfile, fail }) => {
   )
 }
 
+// Told apart by whether this bot was given a saved profile. Everything else
+// about the two paths is the same.
+const REFUSED_GUEST =
+  'this meeting does not take guests — Meet refuses anonymous visitors for any ' +
+  'meeting created by a personal Google account. Add a Google account in Call ' +
+  'Bots and send the bots on that instead.'
+
 const join = async (ctx) => {
-  const { page, target, log, fail, options, setWaitingAdmission } = ctx
+  const { page, target, log, fail, options, setWaitingAdmission, displayName } = ctx
+  const guest = !ctx.meetProfile
   try {
     await page.goto(target.url, { waitUntil: 'domcontentloaded' })
   } catch (error) {
@@ -463,7 +491,7 @@ const join = async (ctx) => {
       await page.waitForTimeout(POLL_FAST)
       continue
     }
-    const { stage, detail } = classify(read, page.url())
+    const { stage, detail } = classify(read, page.url(), guest)
 
     if (stage === 'in-call') {
       setWaitingAdmission?.(false)
@@ -476,11 +504,32 @@ const join = async (ctx) => {
       return { callId: target.callId }
     }
 
-    if (stage === 'signin') await failSignedOut(ctx)
+    if (stage === 'signin') {
+      // A guest being asked to sign in has been turned away, not logged out —
+      // there is no session here to have expired.
+      if (guest) await fail('entry', REFUSED_GUEST)
+      await failSignedOut(ctx)
+    }
+
+    if (stage === 'name-entry') {
+      // Meet remembers the name, so a second pass finds the field already
+      // filled; fill() replaces rather than appends.
+      if (!(await typeName(page, displayName))) {
+        await fail('entry', 'the Google Meet name field would not take a name')
+      }
+      await page.waitForTimeout(POLL_FAST)
+      continue
+    }
 
     if (stage === 'refused') {
       setWaitingAdmission?.(false)
-      await fail(phase === 'entry' ? 'entry' : 'join', `Google Meet refused this account: ${detail}`)
+      // "You can't join this video call" means one thing to a guest and quite
+      // another to an account, and the fix is not the same.
+      const why =
+        guest && /can'?t join this/iu.test(detail ?? '')
+          ? REFUSED_GUEST
+          : `Google Meet refused this ${guest ? 'guest' : 'account'}: ${detail}`
+      await fail(phase === 'entry' ? 'entry' : 'join', why)
     }
 
     if (stage === 'offline') {
