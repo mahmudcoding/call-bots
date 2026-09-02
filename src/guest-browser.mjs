@@ -734,8 +734,8 @@ export class GuestWindow {
         avail = num(stat.availableOutgoingBitrate)
         const local = byId(stat.pc, stat.localCandidateId)
         const remote = byId(stat.pc, stat.remoteCandidateId)
-        if (local) localCand = { type: local.candidateType ?? null, protocol: local.protocol ?? null }
-        if (remote) remoteCand = { type: remote.candidateType ?? null, protocol: remote.protocol ?? null }
+        if (local) localCand = { type: local.candidateType ?? null, proto: local.protocol ?? null, net: null }
+        if (remote) remoteCand = { type: remote.candidateType ?? null, proto: remote.protocol ?? null }
       } else if (stat.type === 'transport' && stat.dtlsState) {
         dtls = stat.dtlsState
       }
@@ -799,10 +799,14 @@ export class GuestWindow {
     let down = 0
     let rtt = null
     let jitter = null
+    let loss = null
+    let via = false
+    let limit = null
     // Distinct sources and tracks, not streams: Meet sends a camera as three
     // simulcast layers, and three layers must not read as three cameras.
     const out = { a: new Set(), v: new Set() }
     const inbound = { a: new Set(), v: new Set() }
+    const byId = (pc, id) => (id ? page.stats[`${pc}|${id}`] ?? null : null)
 
     for (const [key, stat] of Object.entries(page.stats)) {
       if (!mine.has(stat.pc)) continue
@@ -811,31 +815,40 @@ export class GuestWindow {
         up += kbps
         if (stat.kind === 'video') upV += kbps
         if (kbps > 0) out[stat.kind === 'video' ? 'v' : 'a'].add(stat.mediaSourceId || key)
+        const reason = stat.qualityLimitationReason
+        if (reason && reason !== 'none' && kbps > 0) limit = reason
       } else if (stat.type === 'inbound-rtp') {
         const kbps = rate(key, Number(stat.bytesReceived) || 0)
         down += kbps
         if (kbps > 0) inbound[stat.kind === 'video' ? 'v' : 'a'].add(stat.trackIdentifier || key)
         if (stat.kind === 'video' && jitter === null && stat.jitter) jitter = Number(stat.jitter) * 1000
-      } else if (
-        stat.type === 'candidate-pair' &&
-        stat.state === 'succeeded' &&
-        stat.currentRoundTripTime
-      ) {
-        rtt = Number(stat.currentRoundTripTime) * 1000
+        // Worst loss among what is being received, as a percentage of packets
+        // that should have arrived — the same figure the monitor's summary
+        // carries, so the card's quality dot judges a guest by the same rule.
+        const lost = Number(stat.packetsLost) || 0
+        const got = Number(stat.packetsReceived) || 0
+        if (got + lost > 0) loss = Math.max(loss ?? 0, (lost / (got + lost)) * 100)
+      } else if (stat.type === 'candidate-pair' && stat.state === 'succeeded') {
+        if (stat.currentRoundTripTime) rtt = Number(stat.currentRoundTripTime) * 1000
+        if (stat.nominated === 'true') {
+          const local = byId(stat.pc, stat.localCandidateId)
+          const remote = byId(stat.pc, stat.remoteCandidateId)
+          if (local?.candidateType === 'relay' || remote?.candidateType === 'relay') via = true
+        }
       }
     }
     return {
       pcs: mine.size,
-      via: false,
+      via,
       down: r1(down),
       up: r1(up),
       upV: r1(upV),
       rtt: r1(rtt),
-      loss: null,
+      loss: loss === null ? null : r1(loss),
       jit: r1(jitter),
       in: { a: inbound.a.size, v: inbound.v.size },
       out: { a: out.a.size, v: out.v.size },
-      limit: null,
+      limit,
     }
   }
 
