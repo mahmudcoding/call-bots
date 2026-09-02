@@ -166,11 +166,16 @@ const stop = (child, userDataDir) => {
       // Already gone.
     }
   }
-  try {
-    rmSync(userDataDir, { recursive: true, force: true })
-  } catch {
-    // A directory Chrome is still unlinking is not a teardown failure.
+  // Chrome is still unlinking its own files for a moment after the kill, so the
+  // first removal usually loses the race and leaves the profile behind.
+  const sweep = (attempt = 0) => {
+    try {
+      rmSync(userDataDir, { recursive: true, force: true })
+    } catch {
+      if (attempt < 5) setTimeout(() => sweep(attempt + 1), 500).unref?.()
+    }
   }
+  sweep()
 }
 
 // Serialised: two guests starting at once must not each start a browser.
