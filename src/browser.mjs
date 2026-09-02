@@ -51,9 +51,8 @@ const GOOGLE_CHROME_PATHS = {
 export const systemChromePath = () =>
   (CHROME_PATHS[process.platform] ?? []).find((path) => path && existsSync(path)) ?? null
 
-// Google sign-in is supported by Google Chrome, not the open-source Chromium
-// bundle. Meet profiles are created in normal Chrome and must be reopened by
-// that same browser family later.
+// Meet guests run in a copy of the real Google Chrome (see guest-browser.mjs),
+// so it has to be installed for them; the bundled Chromium is not Chrome.
 export const googleChromePath = () =>
   (GOOGLE_CHROME_PATHS[process.platform] ?? []).find((path) => path && existsSync(path)) ?? null
 
@@ -121,24 +120,13 @@ const buildArgs = (guest, media, options) => {
 // either way, and Meet does not currently mind — this only drops the parts we
 // can drop.
 //
-// The keychain pair is a macOS-only fix. Setup uses normal Chrome and therefore
-// the normal macOS keychain, and Playwright's mock-keychain default would make
-// that same profile's encrypted Google cookies unreadable when reopened. On
-// Linux the opposite is true: --password-store=basic is what lets Chrome read
-// its own cookies on a headless box with no unlocked keyring, and taking it
-// away would silently sign every profile out.
-const meetLaunchIgnores = () =>
-  process.platform === 'darwin'
-    ? ['--enable-automation', '--use-mock-keychain', '--password-store=basic']
-    : ['--enable-automation']
-
 const onMeet = (options) => String(options?.baseUrl ?? '').includes('meet.google.com')
 
 // One browser PROCESS per guest: the fake-capture-file flags are process-wide,
 // so distinct media needs distinct processes. Aloqa contexts are always fresh
-// and anonymous; Meet deliberately reopens the one isolated signed-in profile
-// reserved for that bot. A Meet GUEST is neither — see src/guest-browser.mjs.
-export const launchGuest = async (guest, media, options, codecs = null, meetProfile = null) => {
+// and anonymous Playwright browsers. A Meet guest is not a Playwright browser
+// at all — see src/guest-browser.mjs.
+export const launchGuest = async (guest, media, options, codecs = null) => {
   const args = buildArgs(guest, media, options)
   const headless = !options.headed
   const contextOptions = {
@@ -149,16 +137,13 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
     // it. Everything else about a bot is unaffected by the larger surface: its
     // camera comes from a file, not from rendering.
     viewport: { width: 1920, height: 1080 },
-    // Meet's controls are read in English, and for a signed-OUT guest the
-    // browser locale is what decides the language — hl in the link only wins
-    // once there is no account preference to override it.
-    ...(meetProfile || onMeet(options) ? { locale: 'en-US' } : {}),
+    ...(onMeet(options) ? { locale: 'en-US' } : {}),
   }
 
   let browser = null
   let context = null
   try {
-    if (!meetProfile && onMeet(options)) {
+    if (onMeet(options)) {
       if (process.platform !== 'darwin') {
         throw new Error('Meet guests need macOS — on this machine, send Meet bots as Google accounts')
       }
@@ -170,44 +155,24 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
       const window = await GuestWindow.open(media, options, { tag: guest.slug })
       return { browser: null, context: null, page: window, close: () => window.close() }
     }
-    if (meetProfile) {
-      const executablePath = googleChromePath()
-      if (!executablePath) {
-        throw new Error('Google Chrome is required for saved Google Meet accounts')
-      }
-      args.push('--lang=en-US', '--disable-session-crashed-bubble')
-      context = await chromium.launchPersistentContext(meetProfile.userDataDir, {
-        executablePath,
-        headless,
-        args,
-        ignoreDefaultArgs: meetLaunchIgnores(),
-        ...contextOptions,
-      })
-      browser = context.browser()
-    } else {
-      const primary = resolveChannel(options.browser)
-      try {
-        browser = await chromium.launch({ channel: primary, headless, args })
-      } catch (error) {
-        const fallback = primary === 'chrome' ? 'chromium' : 'chrome'
-        const available = fallback === 'chrome' ? systemChromePath() : bundledChromiumPath()
-        if ((options.browser && options.browser !== 'auto') || !available) throw error
-        log.warn(`browser launch failed (${error.message.split('\n')[0]}); retrying`)
-        browser = await chromium.launch({ channel: fallback, headless, args })
-      }
-      context = await browser.newContext(contextOptions)
+    const primary = resolveChannel(options.browser)
+    try {
+      browser = await chromium.launch({ channel: primary, headless, args })
+    } catch (error) {
+      const fallback = primary === 'chrome' ? 'chromium' : 'chrome'
+      const available = fallback === 'chrome' ? systemChromePath() : bundledChromiumPath()
+      if ((options.browser && options.browser !== 'auto') || !available) throw error
+      log.warn(`browser launch failed (${error.message.split('\n')[0]}); retrying`)
+      browser = await chromium.launch({ channel: fallback, headless, args })
     }
+    context = await browser.newContext(contextOptions)
 
     await context.grantPermissions(['camera', 'microphone'], { origin: options.baseUrl })
     // Codec preferences and the synthetic screen need document-start hooks:
     // both have to exist before the call platform's bundle builds its first
-    // peer connection. Persistent contexts take init scripts the same way
-    // fresh ones do, so Meet gets them too.
-    //
-    // The codec shim goes in even where codec CONTROL is switched off, because
-    // its connection registry is also how the stream monitor finds a page's
-    // peer connections. Without it Meet reports "no connection" on a live call
-    // and the camera watchdog has nothing to watch.
+    // peer connection. The codec shim goes in even where codec CONTROL is
+    // switched off, because its connection registry is also how the stream
+    // monitor finds a page's peer connections.
     await context.addInitScript((prefs) => {
       window.__botCodecInit__ = prefs
     }, codecs ?? {})
@@ -226,81 +191,12 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
     // starting, none of them loads a page in twenty seconds, and every bot dies
     // of a timeout that says nothing about the real problem.
     context.setDefaultTimeout(Math.min(120_000, 20_000 + (options.batchSize ?? 1) * 2_000))
-    const page = meetProfile ? context.pages()[0] ?? (await context.newPage()) : await context.newPage()
-    return {
-      browser,
-      context,
-      page,
-      close: () => (meetProfile ? context.close() : browser.close()),
-    }
+    const page = await context.newPage()
+    return { browser, context, page, close: () => browser.close() }
   } catch (error) {
     if (context) await context.close().catch(() => {})
     if (browser) await browser.close().catch(() => {})
-    if (meetProfile) {
-      // Chrome refuses to open a profile a second Chrome already has. The raw
-      // form of this is a screenful of Playwright's launch command line, and
-      // the one thing the user has to do is not in it.
-      if (/ProcessSingleton|SingletonLock/iu.test(error.message)) {
-        throw new Error(
-          `${meetProfile.displayName} is already open in a Chrome window — ` +
-            'close that window, then send the bots again',
-        )
-      }
-      // Otherwise: Playwright launch errors include the full Chrome command
-      // line. Replace the private user-data path before the error reaches a
-      // bot log or the API.
-      const safe = String(error.message).split(meetProfile.userDataDir).join('[private Meet profile]')
-      throw new Error(safe)
-    }
     throw error
-  }
-}
-
-// Does Google still accept this saved profile? The files on disk only say a
-// sign-in happened once; a session that Google has since expired looks
-// identical there and is otherwise discovered as a failed bot halfway through
-// a batch. Deliberately conservative: only a clear signed-out signal demotes a
-// profile, because wrongly demoting a good account costs a manual re-sign-in.
-export const probeMeetSession = async (userDataDir, { timeout = 45_000 } = {}) => {
-  const executablePath = googleChromePath()
-  if (!executablePath) throw new Error('Google Chrome is required to check Google Meet accounts')
-
-  let context = null
-  const run = async () => {
-    context = await chromium.launchPersistentContext(userDataDir, {
-      executablePath,
-      headless: true,
-      args: ['--lang=en-US', '--disable-session-crashed-bubble', '--mute-audio'],
-      ignoreDefaultArgs: meetLaunchIgnores(),
-      locale: 'en-US',
-      viewport: { width: 1280, height: 800 },
-    })
-    const page = context.pages()[0] ?? (await context.newPage())
-    await page.goto('https://meet.google.com/?hl=en&authuser=0', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30_000,
-    })
-    await page.waitForTimeout(2_500)
-    if (new URL(page.url()).hostname === 'accounts.google.com') return false
-    return page.evaluate(() => {
-      if (document.querySelector('[aria-label*="Google Account" i]')) return true
-      const text = document.body?.innerText ?? ''
-      if (/New meeting|Start a meeting|Join a meeting/iu.test(text)) return true
-      if (/Sign in to|Sign in\b/iu.test(text)) return false
-      return true
-    })
-  }
-
-  try {
-    return await Promise.race([
-      run(),
-      new Promise((resolve) => setTimeout(() => resolve(true), timeout)),
-    ])
-  } catch {
-    // A launch that failed says nothing about the Google session.
-    return true
-  } finally {
-    if (context) await context.close().catch(() => {})
   }
 }
 

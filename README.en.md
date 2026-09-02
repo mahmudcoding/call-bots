@@ -3,11 +3,10 @@
 *По-русски: [README.md](README.md)*
 
 Put bots into Aloqa or Google Meet calls from one computer. Each bot is a real
-browser that opens the call link and publishes real audio and video. Aloqa bots
-join as anonymous guests, so there is nothing to provision. Google Meet is the
-rare case: it needs one manually signed-in Google account per concurrent bot,
-managed by the app, and it stays out of the dashboard until you paste a Meet
-link.
+browser that opens the call link and publishes real audio and video. Bots join
+as anonymous guests — in Aloqa and in Google Meet alike — so there is nothing
+to provision. Meet is the rare case, and it stays out of the dashboard until
+you paste a Meet link.
 
 ## One command
 
@@ -48,12 +47,12 @@ Meet is a rare guest here, so it stays out of sight: paste a
 `https://meet.google.com/abc-defg-hij` link and one line appears under the link
 field. With an Aloqa link, or none, the dashboard says nothing about Meet at all.
 
-That line offers the two ways in. **Guests** is the default and needs no Google
-account: each bot opens a real Chrome window, types its name and joins — or
-waits for you to admit it, exactly as an Aloqa guest does. Terminal: that is
-what `join` already does. Guests get the same card as every other bot: a live
-thumbnail of what they publish, the stream monitor with per-stream codec,
-resolution and bitrate, and the dark-camera watchdog.
+Meet bots are guests and need no Google account: each bot opens a real Chrome
+window, types its name and joins — or waits for you to admit it, exactly as an
+Aloqa guest does. Terminal: that is what `join` already does. Guests get the
+same card as every other bot: a live thumbnail of what they publish, the stream
+monitor with per-stream codec, resolution and bitrate, and the dark-camera
+watchdog.
 
 What a guest needs, all on the Mac running Call Bots:
 
@@ -64,7 +63,8 @@ What a guest needs, all on the Mac running Call Bots:
 - **One macOS Automation prompt**, the first time: *Call Bots wants access to
   control the Call Bots browser.* Click Allow. It appears before any bot window
   opens.
-- **macOS.** On Linux, Meet bots are Google accounts only.
+- **macOS.** There are no Meet bots on Linux: the guest windows are driven
+  through Apple Events, which do not exist there.
 
 Every guest is its own Chrome process with its own camera clip and voice — the
 five cycle through the bots exactly as they do for Aloqa. (Chrome's fake
@@ -77,41 +77,31 @@ when a send goes past what the machine can carry. Guest windows are small and
 tiled on purpose — Meet sends them video sized to the tiles they draw, which
 is most of the headroom.
 
-## Google Meet accounts
+## What Meet will not do
 
-**Google accounts** is the other half of that switch, and the one that always
-works. Each concurrent Meet bot needs its own Google account, and Google Chrome
-must be installed. Terminal: `--as account`. **Manage → Add account** opens Chrome on an isolated Call Bots
-profile — sign in there and the row confirms it while the window is still open;
-close that window and the account turns Ready. **Check** reopens a saved profile
-quietly and reports whether Google still accepts it, so a session that has
-expired is found before a batch is, not halfway through one. **Remove** deletes
-only that local session, never the Google account.
+Bots enter directly when permitted, or wait for the host to admit them. Camera,
+microphone, participant checks, the RTC stream monitor and the dark-camera
+watchdog all work the same as on Aloqa — a Meet bot whose camera goes dark gets
+healed like any other.
 
-Bots use their Google display names, enter directly when permitted, or wait for
-the host to admit them. Camera, microphone, participant checks, the RTC stream
-monitor and the dark-camera watchdog all work the same as on Aloqa — a Meet bot
-whose camera goes dark now gets healed like any other.
-
-Three things stay off for Meet, each because Meet itself will not do them:
+Two things stay off for Meet, each because Meet itself will not do them:
 **screen sharing** (Meet is handed a live 1920x1080 track and then refuses to
-start presenting), **send codecs** (Meet negotiates its own list and picks AV1
-from it whatever the preference says), and **`--label`** (a Meet bot is named by
-its Google account). The controls are hidden rather than left to fail, and the
-checks behind them are in `src/platforms/meet.mjs`.
+start presenting) and **send codecs** (Meet negotiates its own list and picks
+AV1 from it whatever the preference says). The controls are hidden rather than
+left to fail, and the checks behind them are in `src/platforms/meet.mjs`. And
+Meet turns guests away from meetings created by a personal Google account — the
+bot's card says so; Google Workspace meetings take guests when the admin allows.
 
 **"Call Bots was prevented from modifying apps on your Mac."** Dismiss it — Call
 Bots never modifies an app, and nothing here needs that permission. It is Google
 Chrome finishing its own update: macOS blames whichever app launched Chrome, and
-for Meet that has to be this one, because the saved sign-in belongs to real
-Chrome and not to the bundled Chromium. To stop it recurring, open Chrome by
-itself once and let the update finish, or grant **App Management** to
+the guests' copy of Chrome is launched from here. To stop it recurring, open
+Chrome by itself once and let the update finish, or grant **App Management** to
 *GoogleUpdater* — not to Call Bots.
 
-**Meet must be in English.** Meet renders in the signed-in account's own Google
-language, which overrides the language in the link, and the adapter reads
-Meet's English controls. An account set to another language is reported as such
-rather than timing out.
+**Meet is always in English for the bots.** The guests' copy of Chrome starts
+with an English interface because the adapter reads Meet's English controls; if
+Meet ever shows something else, the bot says so rather than timing out.
 
 ## What a bot publishes
 
@@ -135,7 +125,7 @@ replace the camera clips. Sources and licences are in
   that, CPU contention degrades the media itself.
 - **Getting in.** On entry mode **Open** bots walk straight in. On **Wait for
   admission** they queue in the lobby and wait up to ten minutes for you. Meet
-  accounts likewise enter directly when allowed or wait for the host — and a
+  guests likewise enter directly when allowed or wait for the host — and a
   Meet bot that is let straight in reports a failure in a minute rather than
   sitting out the ten-minute lobby budget that never applied to it.
 - **Screen sharing** is `--share <n|all>` — that many bots start sharing once

@@ -7,7 +7,6 @@
 //
 //   node scripts/test-stop.mjs
 import http from 'node:http'
-import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,7 +18,6 @@ process.env.CALL_BOTS_HOME = mkdtempSync(join(tmpdir(), 'call-bots-test-'))
 const { RUN_MARKER } = await import('../src/browser.mjs')
 const { runsDir } = await import('../src/config.mjs')
 const { Roster } = await import('../src/orchestrator.mjs')
-const { MeetProfileStore } = await import('../src/meet-profiles.mjs')
 const { resolveLink } = await import('../src/platforms/index.mjs')
 const { findMarkedPids, killPids } = await import('../src/procs.mjs')
 
@@ -152,18 +150,7 @@ try {
   }
 
   const { startServer } = await import('../src/server.mjs')
-  const profileChildren = []
-  const serverProfiles = new MeetProfileStore({
-    root: join(process.env.CALL_BOTS_HOME, 'server-meet-profiles'),
-    chromePath: () => '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    spawnProcess: () => {
-      const child = new EventEmitter()
-      child.unref = () => {}
-      profileChildren.push(child)
-      return child
-    },
-  })
-  api = await startServer({ port: 0, open: false, profileStore: serverProfiles })
+  api = await startServer({ port: 0, open: false })
   apiBase = `http://127.0.0.1:${api.address().port}`
   const post = async (path, body) => {
     const response = await fetch(`${apiBase}${path}`, {
@@ -175,75 +162,25 @@ try {
   }
   const getState = async () => (await fetch(`${apiBase}/api/state`)).json()
 
-  console.log('\nMeet capacity is rejected before launch')
+  console.log('\nthe state says what Meet needs on this machine')
   {
-    const before = new Set(runIds())
     const current = await getState()
-    check('the state exposes a sanitized empty Meet profile list',
-      Array.isArray(current.meetProfiles?.profiles) && current.meetProfiles.available === 0 &&
-        !JSON.stringify(current.meetProfiles).includes(process.env.CALL_BOTS_HOME))
-    // Only the account path needs an identity pool. Asking for it without one
-    // must fail before anything is launched.
-    const refused = await post('/api/start', {
-      link: 'https://meet.google.com/abc-defg-hij',
-      guests: 1,
-      meetMode: 'account',
-    })
-    check('a Meet start without enough accounts is actionable',
-      refused.ok === false && /Add or reconnect accounts/iu.test(refused.error ?? ''),
-      JSON.stringify(refused))
-    check('capacity failure creates no roster or browser run',
-      (await getState()).status === 'idle' && runIds().every((candidate) => before.has(candidate)))
-  }
-
-  console.log('\nMeet profile setup endpoints')
-  {
-    const setup = await post('/api/meet-profiles/setup')
-    check('the setup endpoint opens a new isolated profile',
-      setup.ok === true && setup.profile?.status === 'setting-up' && profileChildren.length === 1,
-      JSON.stringify(setup))
-    const profileDir = join(serverProfiles.root, setup.profile.id)
-    mkdirSync(join(profileDir, 'Default'), { recursive: true })
-    writeFileSync(join(profileDir, 'Default', 'Preferences'), JSON.stringify({
-      account_info: [{ account_id: 'private-id', email: 'server-test@example.test', full_name: 'Server Tester' }],
-    }))
-    profileChildren[0].emit('exit', 0)
-    const ready = await getState()
-    const serialized = JSON.stringify(ready.meetProfiles)
-    check('closing setup publishes only safe ready-account metadata',
-      ready.meetProfiles.available === 1 &&
-        ready.meetProfiles.profiles[0]?.displayName === 'Server Tester' &&
-        !serialized.includes('server-test@example.test') && !serialized.includes(profileDir),
-      serialized)
-    // The dashboard cannot see inside the sign-in window, so a stale session
-    // has to be findable on demand — over the same API, without a browser.
-    serverProfiles.inspect = () => ({ signedIn: false, displayName: null })
-    const checked = await post('/api/meet-profiles/verify', { id: setup.profile.id })
-    check('the verify endpoint demotes a profile whose session is gone',
-      checked.ok === true && checked.profile?.status === 'needs-sign-in' &&
-        (await getState()).meetProfiles.available === 0,
-      JSON.stringify(checked))
-    check('and says nothing private while doing it',
-      !JSON.stringify(checked).includes('server-test@example.test') &&
-        !JSON.stringify(checked).includes(profileDir))
-
-    const removed = await post('/api/meet-profiles/remove', { id: setup.profile.id })
-    check('the removal endpoint deletes the unused local profile',
-      removed.ok === true && (await getState()).meetProfiles.profiles.length === 0)
+    check('the state carries the Meet readiness flags',
+      typeof current.meet?.chromeReady === 'boolean' && typeof current.meet?.macOS === 'boolean',
+      JSON.stringify(current.meet))
   }
 
   console.log('\nthe dashboard only takes orders from itself')
   {
-    const attack = await fetch(`${apiBase}/api/meet-profiles/setup`, {
+    const attack = await fetch(`${apiBase}/api/stop`, {
       method: 'POST',
       // What a malicious page can actually send: no preflight, so no CORS to
-      // save us. Add account opens a real Chrome window on the user's desktop.
+      // save us. Every mutation opens browsers or closes calls on the user's
+      // desktop, so none of them may come from another site.
       headers: { 'content-type': 'text/plain', origin: 'https://evil.example' },
       body: '{}',
     })
-    check('a POST from another site cannot open a Chrome window',
-      attack.status === 403 && profileChildren.length === 1,
-      `${attack.status}, ${profileChildren.length} chrome launches`)
+    check('a POST from another site is refused', attack.status === 403, String(attack.status))
     const tunnelled = await fetch(`${apiBase}/api/stop`, {
       method: 'POST',
       // An SSH tunnel is free to forward this to any local port it likes.

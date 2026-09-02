@@ -5,8 +5,7 @@ import { RUN_MARKER } from './browser.mjs'
 import { ensureDirs } from './config.mjs'
 import { ensureGuestFixtures } from './fixtures.mjs'
 import { plain as log } from './log.mjs'
-import { meetProfileStore } from './meet-profiles.mjs'
-import { Roster, meetMode } from './orchestrator.mjs'
+import { Roster } from './orchestrator.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
 import { platformById, resolveLink } from './platforms/index.mjs'
 
@@ -21,8 +20,7 @@ usage:
 
 options:
   --bots <n>         how many bots to send (default 2)
-  --label <text>     custom bot label (a Meet account bot uses its own name)
-  --as <kind>        Meet only: guest (default, no accounts) or account
+  --label <text>     custom bot label
   --headed           show the bot browser windows (default: headless)
   --browser <name>   chrome, chromium, or auto (default)
   --share <n|all>    have that many bots share a screen once they are in
@@ -37,11 +35,10 @@ options:
   --fps <n>          camera video frame rate (default 12)
   --regen            rebuild the media even if it is cached
 
-Aloqa bots join anonymously, and so do Google Meet bots by default — they type
-a name and wait for the host to admit them, with nothing to set up. Meet refuses
-anonymous visitors for meetings created by a personal Google account; for those,
-add accounts in the Call Bots app and pass --as account, one ready account per
-concurrent bot.`
+Aloqa bots join anonymously, and so do Google Meet bots — they type a name and
+wait for the host to admit them, with nothing to set up. Meet bots need macOS
+and Google Chrome installed, and Meet refuses anonymous visitors for meetings
+created by a personal Google account.`
 
 const parseCli = () => {
   const { values, positionals } = parseArgs({
@@ -51,7 +48,6 @@ const parseCli = () => {
       bots: { type: 'string' },
       guests: { type: 'string' },
       label: { type: 'string' },
-      as: { type: 'string' },
       headed: { type: 'boolean', default: false },
       browser: { type: 'string', default: 'auto' },
       share: { type: 'string' },
@@ -142,15 +138,8 @@ const main = async () => {
     // Refuse the flags this platform genuinely cannot honour, from what it
     // declares rather than from a list of platform names kept in this file.
     const platform = platformById(target.platform)
-    const mode = meetMode(values.as)
-    if (values.as && !['guest', 'account'].includes(values.as)) {
-      throw new Error('--as takes guest or account')
-    }
     const caps = platform?.capabilities ?? {}
     const unavailable = [
-      // Meet names a bot after its Google account; nothing can rename it.
-      // Only an account bot cannot be renamed; a guest types whatever it likes.
-      values.label && target.platform === 'meet' && mode === 'account' ? '--label' : null,
       values.share && caps.screen === false ? '--share' : null,
       values['audio-codec'] && caps.codecs === false ? '--audio-codec' : null,
       values['video-codec'] && caps.codecs === false ? '--video-codec' : null,
@@ -162,15 +151,7 @@ const main = async () => {
           `unavailable for ${platform?.label ?? target.platform}`,
       )
     }
-    let profileStore = null
-    if (target.platform === 'meet' && mode === 'account') {
-      profileStore = meetProfileStore()
-      profileStore.assertAvailable(count)
-    }
-    const roster = new Roster(
-      { ...buildOptions(values, target.origin), meetMode: mode },
-      { profileStore },
-    )
+    const roster = new Roster(buildOptions(values, target.origin))
 
     let interrupted = 0
     const onSigint = () => {

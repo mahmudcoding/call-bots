@@ -3,7 +3,6 @@ import { THEME_COUNT, ensureGuestFixtures, guestColorHex } from './fixtures.mjs'
 import { Guest } from './guest.mjs'
 import { plain as log } from './log.mjs'
 import { concurrencyWarning } from './machine.mjs'
-import { meetProfileStore } from './meet-profiles.mjs'
 import { platformById } from './platforms/index.mjs'
 import { findMarkedPids, killPids } from './procs.mjs'
 
@@ -43,27 +42,6 @@ const withMeetClip = (options) => {
   return { ...options, size: `${MEET_CLIP_MAX}x${even(height)}` }
 }
 
-export const meetMode = (value) => {
-  if (value === 'account') return 'account'
-  if (value === 'guest') return 'guest'
-  return process.platform === 'darwin' ? 'guest' : 'account'
-}
-
-export const meetAccountLabels = (profiles, occupied = []) => {
-  const labels = new Set(occupied)
-  return profiles.map((profile, index) => {
-    const base = profile.displayName
-    let unique = base
-    let suffix = profile.accountNumber ?? index + 1
-    while (labels.has(unique)) {
-      unique = `${base} · Google ${suffix}`
-      suffix += 1
-    }
-    labels.add(unique)
-    return unique
-  })
-}
-
 const pool = async (items, worker, concurrency) => {
   const queue = [...items]
   const failures = []
@@ -84,13 +62,12 @@ const pool = async (items, worker, concurrency) => {
 
 // Holds every bot of one call and the run-owned resources behind them.
 export class Roster {
-  constructor(options, { profileStore = null } = {}) {
+  constructor(options) {
     this.options = options
     this.runId = `${new Date().toISOString().replace(/[:.]/gu, '-')}-${process.pid}`
     this.runDir = createRunDir(this.runId)
     this.options.runId = this.runId
     this.options.runDir = this.runDir
-    this.profileStore = profileStore
     this.guests = []
     this.counter = 0
     // Bots are sent in more than once — five now, seven when the call fills up.
@@ -168,15 +145,11 @@ export class Roster {
     if (target) this.target = target
     if (!this.target) throw new Error('no call link — paste the call link first')
 
-    // Meet takes bots either way: as saved Google accounts, or as anonymous
-    // guests that type a name and wait to be admitted. Only the account path
-    // needs an identity pool, and only it overrides the bot's label.
     const isMeet = this.target.platform === 'meet'
     const total = this.guests.length + count
     const warning = concurrencyWarning(total, undefined, { meet: isMeet })
     if (warning) log.warn(warning)
-    const useAccounts = isMeet && meetMode(overrides?.meetMode ?? this.options.meetMode) === 'account'
-    const label = useAccounts ? '' : String(overrides?.label ?? this.options.label ?? '').trim()
+    const label = String(overrides?.label ?? this.options.label ?? '').trim()
 
     const users = Array.from({ length: count }, () => {
       this.counter += 1
@@ -191,16 +164,6 @@ export class Roster {
       }
     })
 
-    let meetProfiles = []
-    if (useAccounts) {
-      this.profileStore ??= meetProfileStore()
-      meetProfiles = this.profileStore.reserveMany(
-        users.length,
-        `${this.runId}:batch-${batch.id}`,
-      )
-      const names = meetAccountLabels(meetProfiles, this.guests.map((guest) => guest.label))
-      for (let index = 0; index < users.length; index += 1) users[index].label = names[index]
-    }
     log.info(`preparing ${users.length} bot(s)`)
     let media
     try {
@@ -208,14 +171,13 @@ export class Roster {
       // down for nothing — on a machine these bots already push to its limit.
       media = await ensureGuestFixtures(users, isMeet ? withMeetClip(this.options) : this.options)
     } catch (error) {
-      for (const profile of meetProfiles) profile.release()
       throw error
     }
     // Every browser in a batch competes with the ones still starting, so the
     // size of the batch is part of how long anything takes.
     const options = { ...this.options, ...(overrides ?? {}), batchSize: total }
     const guests = users.map(
-      (user, index) => new Guest(user, media.get(user.slug), options, meetProfiles[index] ?? null),
+      (user) => new Guest(user, media.get(user.slug), options),
     )
     for (const guest of guests) guest.batch = batch
     this.guests.push(...guests)
@@ -259,7 +221,6 @@ export class Roster {
           await guest.join(this.target)
           this.meetingId ??= guest.meetingId
         } catch (error) {
-          if (useAccounts) await guest.closeAfterFailure().catch(() => {})
           failed(guest, error)
         }
       }),
@@ -353,7 +314,6 @@ export class Roster {
           screen,
           rtc,
           codecs: guest.codecs,
-          account: guest.account,
           note: guest.note,
           lastError: guest.lastError,
         }
@@ -372,7 +332,6 @@ export class Roster {
       meetingId: this.meetingId,
       inviteLink: this.callUrl,
       platform: this.platform,
-      meetMode: meetMode(this.options.meetMode),
       capabilities: platformById(this.target?.platform)?.capabilities ?? null,
       batches,
       guests,

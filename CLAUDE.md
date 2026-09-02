@@ -9,9 +9,11 @@ changes this without notice, and none of it is documented by them.
 
 ## Why Google Meet refuses a guest bot
 
-A Meet bot joins one of two ways. With a saved Chrome profile it joins as that
-Google account. Without one it joins anonymously — types a name, asks to be let
-in. The anonymous path is the one with a trap in it.
+A Meet bot joins anonymously — types a name, asks to be let in. (Until
+2026-09-03 there was a second way, a saved signed-in Chrome profile driven by
+Playwright; it needed one Google account per bot and a profile store to manage
+them, and was removed for it. The facts measured about it are kept below where
+they still explain something.) The anonymous path is the one with a trap in it.
 
 **Attaching a debugger is what gets blocked.** Not headless, not the profile,
 not the browser build — the DevTools/CDP connection itself. Proven back to back
@@ -22,7 +24,7 @@ in the same minute, on the same live meeting, with the same Chrome launch:
 | plain incognito, read through Chrome's AppleScript `execute javascript` | `inputs: ["Your name"]`, "This call is open to anyone" |
 | same launch **plus** `--remote-debugging-port` and `connectOverCDP` | "You can't join this video call" |
 
-A signed-in bot is unaffected and can stay headless on Playwright. Google
+A signed-in bot was unaffected and could stay headless on Playwright. Google
 tolerates automation that has an identity; it does not tolerate anonymous
 automation.
 
@@ -300,8 +302,10 @@ Each is still true; none is worth an evening again.
   `aria-label`, no "you". Matching *sent* tracks does not identify it either,
   because Meet's effects pipeline publishes a different track than the self view
   renders. Remote tiles are the ones playing a `getReceivers()` track.
-- **Meet renders in the account's language**, which overrides `hl` in the link.
-  The adapter reads English control labels, so a non-English account fails.
+- **Meet renders in the browser's UI language for a guest**, which is why the
+  guests' Chrome is started with `--lang=en-US`; the adapter reads English
+  control labels. (A signed-in account's own language setting overrode even
+  that, back when accounts were a way in.)
 - **Address windows by id, never by position.** `repeat with _c in windows`
   hands back `item i of windows`, a reference by position, and Chrome orders
   `windows` front-to-back — a window made or raised between the lookup and
@@ -327,9 +331,10 @@ Each is still true; none is worth an evening again.
   finishing its own update, attributed to whatever launched Chrome. Call Bots
   needs no such permission; deny it.
 
-To get a meeting code for testing, open `meet.google.com` in a saved profile,
-click `New meeting` (a button), then `Create a meeting for later` (a
-**menuitem**, not a button), and read the code out of `document.body.innerText`.
+To get a meeting code for testing, open `meet.google.com` signed in to any
+Google account, click `New meeting` (a button), then `Create a meeting for
+later` (a **menuitem**, not a button), and read the code out of
+`document.body.innerText`.
 
 ## Tests
 
@@ -337,7 +342,7 @@ No framework. Each script collects `check(name, pass, detail)` and exits 1 on
 any failure.
 
 ```bash
-npm run test:platforms && npm run test:meet-profiles && npm run test:cli \
+npm run test:platforms && npm run test:cli \
   && npm run test:guest && npm run test:ui && npm run test:stop
 ```
 

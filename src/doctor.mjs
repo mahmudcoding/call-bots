@@ -41,17 +41,17 @@ export const collectChecks = async () => {
     )
   }
 
-  // Google Meet: accounts reopen saved profiles in the real Chrome, and guests
-  // run in a copy of it — so on a Mac, Chrome is what decides.
+  // Google Meet: guests run in a copy of the real Chrome, driven through Apple
+  // Events — so a Mac with Chrome installed is what it takes.
   const googleChrome = googleChromePath()
   if (process.platform === 'darwin') {
     checks.push(
       googleChrome
-        ? ok('meet', `Google Chrome found — guests and accounts both available`)
-        : warn('meet', 'Google Chrome not found — Meet bots (guests and accounts) need it'),
+        ? ok('meet', 'Google Chrome found — Meet guests available')
+        : warn('meet', 'Google Chrome not found — Meet guests need it installed'),
     )
   } else {
-    checks.push(warn('meet', 'Meet guests need macOS — on this machine, Meet bots must be Google accounts'))
+    checks.push(warn('meet', 'Meet guests need macOS — Meet is unavailable on this machine'))
   }
 
   const machine = machineProfile()

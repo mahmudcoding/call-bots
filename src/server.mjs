@@ -5,11 +5,10 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { bundledChromiumPath, probeMeetSession, systemChromePath } from './browser.mjs'
+import { bundledChromiumPath, googleChromePath, systemChromePath } from './browser.mjs'
 import { onLog, plain as log } from './log.mjs'
 import { machineProfile, systemUsage } from './machine.mjs'
-import { meetProfileStore } from './meet-profiles.mjs'
-import { Roster, meetMode } from './orchestrator.mjs'
+import { Roster } from './orchestrator.mjs'
 import { platformById, resolveLink } from './platforms/index.mjs'
 
 const UI_PATH = join(dirname(fileURLToPath(import.meta.url)), 'ui.html')
@@ -28,7 +27,6 @@ const session = {
   lastError: null,
 }
 
-let profiles = null
 
 const sseClients = new Set()
 const thumbCache = new Map() // slug -> {at, buffer, inFlight}
@@ -37,15 +35,6 @@ const rtcCache = new Map() // slug -> {at, data, inFlight}
 const broadcast = (message) => {
   const payload = `data: ${JSON.stringify(message)}\n\n`
   for (const client of sseClients) client.write(payload)
-}
-
-// Fire-and-forget: the store calls this from a timer, and a snapshot that fails
-// to build must not take a sign-in down with it.
-const announceProfiles = () => {
-  if (sseClients.size === 0) return
-  stateSnapshot()
-    .then((frame) => broadcast(frame))
-    .catch(() => {})
 }
 
 onLog((entry) => broadcast({ type: 'log', entry }))
@@ -146,7 +135,9 @@ const computeSnapshot = async ({ withVerify = false } = {}) => {
       browserReady: bundledChromiumPath() !== null || systemChromePath() !== null,
       browserInstalling: browserInstall !== null,
       browserProgress,
-      meetProfiles: profiles ? profiles.summary() : { profiles: [], available: 0, chromeReady: false },
+      // What Meet needs on this machine: Google Chrome, and macOS for the
+      // guests' driver. The dashboard says so instead of failing a send.
+      meet: { chromeReady: googleChromePath() !== null, macOS: process.platform === 'darwin' },
       session: rosterState,
       verify: session.verify,
     },
@@ -194,18 +185,14 @@ const codecName = (value) => {
   return name
 }
 
-// Send the first bots in. The link carries the platform, origin and call;
-// Meet then draws the required identities from the configured profile pool.
+// Send the first bots in. The link carries the platform, origin and call.
 const startSession = async (body) => {
   if (session.status !== 'idle') throw new Error(`a session is already ${session.status}`)
   const target = resolveLink(body.link ?? '')
   const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
-  const mode = meetMode(body.meetMode)
-  if (target.platform === 'meet' && mode === 'account') profiles.assertAvailable(count)
 
   const roster = new Roster({
     baseUrl: target.origin,
-    meetMode: mode,
     headed: false,
     browser: 'auto',
     noVideo: Boolean(body.noVideo),
@@ -218,7 +205,7 @@ const startSession = async (body) => {
     screenCodec: codecName(body.screenCodec),
     size: '1920x1080',
     fps: 12,
-  }, { profileStore: profiles })
+  })
   session.roster = roster
   session.status = 'joining'
   session.startedAt = Date.now()
@@ -442,11 +429,7 @@ const localCaller = (request) => {
   }
 }
 
-export const startServer = async ({ port = 4610, open = true, profileStore = null }) => {
-  // Sign-in completes in a Chrome window the dashboard cannot see, so the store
-  // pushes a frame the moment it does rather than making the user close Chrome
-  // and wait for the next poll.
-  profiles = profileStore ?? meetProfileStore({ onChange: () => announceProfiles() })
+export const startServer = async ({ port = 4610, open = true }) => {
   let snapshots = 0
 
   const server = http.createServer(async (request, response) => {
@@ -507,36 +490,12 @@ export const startServer = async ({ port = 4610, open = true, profileStore = nul
         broadcast(await stateSnapshot())
         return
       }
-      if (request.method === 'POST' && url.pathname === '/api/meet-profiles/setup') {
-        const body = await readBody(request)
-        const profile = profiles.setup(body.id)
-        json(response, 200, { ok: true, profile })
-        broadcast(await stateSnapshot())
-        return
-      }
-      if (request.method === 'POST' && url.pathname === '/api/meet-profiles/verify') {
-        const body = await readBody(request)
-        const profile = await profiles.verify(body.id, { launch: probeMeetSession })
-        json(response, 200, { ok: true, profile })
-        broadcast(await stateSnapshot())
-        return
-      }
-      if (request.method === 'POST' && url.pathname === '/api/meet-profiles/remove') {
-        const body = await readBody(request)
-        profiles.remove(body.id)
-        json(response, 200, { ok: true })
-        broadcast(await stateSnapshot())
-        return
-      }
       if (request.method === 'POST' && url.pathname === '/api/add') {
         const body = await readBody(request)
         if (!session.roster || session.status !== 'running') {
           throw new Error('start a session first')
         }
         const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
-        if (session.roster.target?.platform === 'meet' && session.roster.options.meetMode === 'account') {
-          profiles.assertAvailable(count)
-        }
         const result = await session.roster.add(count, null, {
           startCam: body.camera !== false,
           startMic: body.mic !== false,

@@ -343,44 +343,11 @@
     font-size: 12.5px; color: var(--faint);
   }
   .meetbar b { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .meetbar .modes {
-    display: inline-flex; padding: 2px; gap: 2px; flex: none;
-    border-radius: 8px; background: var(--card); border: 1px solid var(--line);
-  }
-  .meetbar .modes button {
-    height: 22px; padding: 0 9px; border: 0; border-radius: 6px; cursor: pointer;
-    background: transparent; color: var(--faint); font: inherit; font-size: 12px;
-  }
-  .meetbar .modes button:hover { color: var(--muted); }
-  .meetbar .modes button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); }
+  .meetbar .lead { font-size: 12px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
   .meetbar.-short b { color: var(--warn); }
   .meetbar .spacer { flex: 1; }
   .meetbar .btn { height: 27px; padding: 0 10px; font-size: 12px; }
 
-  /* ---------- Google account profiles ---------- */
-  .modal {
-    position: fixed; inset: 0; z-index: 70; display: grid; place-items: center;
-    padding: 24px; background: rgba(0,0,0,.68); backdrop-filter: blur(8px);
-  }
-  .dialog {
-    width: min(620px, 100%); max-height: min(720px, calc(100vh - 48px)); overflow-y: auto;
-    padding: 20px; border-radius: var(--r); background: var(--panel);
-    border: 1px solid var(--line-2); box-shadow: 0 24px 80px rgba(0,0,0,.6);
-  }
-  .dhead { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-  .dhead h2 { font-size: 17px; letter-spacing: -.2px; }
-  .dtext { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
-  .accounts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-  .account {
-    display: flex; align-items: center; gap: 10px; padding: 11px 12px;
-    border-radius: var(--r-sm); background: var(--card); border: 1px solid var(--line);
-  }
-  .account .meta { min-width: 0; flex: 1; }
-  .account .nm { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .account .sub { color: var(--faint); font-size: 11.5px; }
-  .account .btn { height: 29px; padding: 0 10px; font-size: 12px; }
-  .account-empty { color: var(--faint); font-size: 12.5px; padding: 16px 4px; text-align: center; }
-  .dialog-actions { display: flex; gap: 8px; }
 </style>
 </head>
 <body>
@@ -439,15 +406,11 @@
       </div>
       <button id="goBtn" class="btn -accent go">Send bots</button>
       <!-- Meet is rare, so it earns exactly one row, and only once a Meet link
-           is in the field. Everything else about it lives behind Manage. -->
+           is in the field: what a guest bot needs on this machine, or that it
+           needs nothing. -->
       <div class="meetbar" id="meetBar" hidden>
-        <span class="modes" role="group" aria-label="How Meet bots identify themselves">
-          <button type="button" data-meet-mode="guest" aria-pressed="true">Guests</button>
-          <button type="button" data-meet-mode="account" aria-pressed="false">Google accounts</button>
-        </span>
+        <span class="lead">Guests</span>
         <span id="meetBarText"></span>
-        <span class="spacer"></span>
-        <button type="button" class="btn" id="accountsBtn" hidden>Manage</button>
       </div>
     </div>
 
@@ -487,21 +450,6 @@
     <div id="cards"></div>
   </div>
 </main>
-
-<div class="modal" id="accountsModal" hidden>
-  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="accountsTitle">
-    <div class="dhead">
-      <h2 id="accountsTitle">Google accounts</h2>
-      <span class="spacer"></span>
-      <button class="btn" id="accountsClose">Close</button>
-    </div>
-    <p class="dtext">Each concurrent Meet bot needs its own Google test account. <b>Add account</b> opens Chrome on an isolated Call Bots profile — sign in there and the row turns Ready on its own. <b>Check</b> confirms Google still accepts a saved session; <b>Remove</b> deletes only that local session, never the Google account. Meet must be in English for the bots to read its controls.</p>
-    <div class="accounts" id="accountList"></div>
-    <div class="dialog-actions">
-      <button class="btn -accent" id="accountAdd">Add account</button>
-    </div>
-  </section>
-</div>
 
 <div id="toasts"></div>
 
@@ -562,127 +510,53 @@ const platformId = () => {
 }
 const capabilities = () =>
   S.state?.session?.capabilities ?? (platformId() === 'meet' ? MEET_CAPABILITIES : FULL_CAPABILITIES)
-const meetProfiles = () =>
-  S.state?.meetProfiles ?? { profiles: [], available: 0, chromeReady: false }
+// What Meet needs on this machine, as the server sees it: Google Chrome, and
+// macOS for the guests' driver. Assumed present until the first state lands.
+const meetInfo = () => S.state?.meet ?? { chromeReady: true, macOS: true }
 
 const S = {
   state: null, cards: new Map(), groups: new Map(), rtc: new Map(),
   errorShown: null, camOn: true, micOn: true,
-  // How the NEXT Meet batch identifies itself. Guests need nothing set up, so
-  // that is where a Meet run starts; a running session's own mode wins over it.
-  meetMode: 'guest',
   admissionNotice: null,
   pinned: new Set(),
   // undefined until the first state arrives — null is a real value here (idle).
   pinnedAt: undefined,
 }
 
-/* ---------- Google account profiles ---------- */
-const ACCOUNT_STATUS = {
-  'setting-up': 'Chrome is open — sign in there',
-  'signed-in': 'Signed in — close that Chrome window to use it',
-  ready: 'Ready',
-  'in-use': 'In use by a Meet bot',
-  'needs-sign-in': 'Needs sign-in',
-}
-const accountName = (profile) => profile.displayName || `Google account ${profile.number}`
-
-const renderAccounts = () => {
-  const summary = meetProfiles()
-  const list = $('#accountList')
-  list.innerHTML = ''
-  if (summary.profiles.length === 0) {
-    list.innerHTML = '<div class="account-empty">No Google accounts configured yet.</div>'
-  }
-  for (const profile of summary.profiles) {
-    const row = el('div', 'account')
-    // The number comes from the server, which keeps it stable: deriving it from
-    // this list's position would renumber every account below a removed one and
-    // make the bot cards name the wrong account.
-    const name = accountName(profile)
-    row.innerHTML = `
-      <div class="meta">
-        <div class="nm">${esc(name)}</div>
-        <div class="sub">Google account ${esc(profile.number)} · ${esc(ACCOUNT_STATUS[profile.status] ?? profile.status)}</div>
-      </div>
-      <button class="btn" data-check>Check</button>
-      <button class="btn" data-connect>Reconnect</button>
-      <button class="btn -danger" data-remove>Remove</button>`
-    const check = $('[data-check]', row)
-    const connect = $('[data-connect]', row)
-    const remove = $('[data-remove]', row)
-    const busy = ['setting-up', 'signed-in', 'in-use'].includes(profile.status)
-    check.disabled = busy
-    check.title = 'Open this account quietly and confirm Google still accepts it'
-    connect.disabled = busy
-    remove.disabled = busy
-    check.onclick = () => checkAccount(profile.id, name, check)
-    connect.onclick = () => setupAccount(profile.id, connect)
-    remove.onclick = () => removeAccount(profile.id, name, remove)
-    list.append(row)
-  }
-  $('#accountAdd').disabled = !summary.chromeReady
-  $('#accountAdd').title = summary.chromeReady ? '' : 'Install Google Chrome first'
-}
-
 // The whole of Meet's presence in the main window: one line, only for a Meet
-// link. Guests need nothing set up, so that is the default and the line stays
-// quiet; accounts bring the readiness count and Manage with them.
+// link. Guests need nothing set up, so the line stays quiet unless this
+// machine is missing what they run on.
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)]
-const guestsSupported = () => /^darwin/u.test(String(S.state?.machine?.platform ?? 'darwin'))
-const meetMode = () => {
-  const running = S.state?.session?.meetMode
-  if (running) return running
-  // Guests are a macOS thing (a real Chrome window driven through Apple
-  // Events); elsewhere the only way into Meet is a Google account.
-  return guestsSupported() ? S.meetMode : 'account'
-}
+const meetUnavailable = () => !meetInfo().macOS || !meetInfo().chromeReady
 
 // One description of what the Meet empty state says. There used to be two,
 // written in two places and both run on every frame, and they drifted apart the
 // moment guests arrived — the later one silently won and talked about accounts
 // to somebody sending guests.
 const meetEmptyState = (joining) => {
-  const summary = meetProfiles()
-  const guests = meetMode() === 'guest'
-  const count = Math.max(1, Number($('#count').value) || 1)
+  const info = meetInfo()
   if (joining) {
     return {
       title: 'Preparing Google Meet bots',
-      text: guests
-        ? 'Each bot opens a Chrome window and asks to be let in — admit them in Meet. ' +
-          'The first send on this Mac also builds a private copy of Chrome (about a minute).'
-        : 'Opening each reserved Google account in its own headless Chrome profile.',
+      text: 'Each bot opens a Chrome window and asks to be let in — admit them in Meet. ' +
+        'The first send on this Mac also builds a private copy of Chrome (about a minute).',
     }
   }
-  if (guests && !summary.chromeReady) {
+  if (!info.macOS) {
+    return {
+      title: 'Google Meet bots need a Mac',
+      text: 'Meet guests are real Chrome windows driven through Apple Events — run Call Bots on macOS for Meet.',
+    }
+  }
+  if (!info.chromeReady) {
     return {
       title: 'Google Chrome is required for Meet',
       text: 'Meet guests run in a copy of Google Chrome — install it, then send again.',
     }
   }
-  if (guests) {
-    return {
-      title: 'Ready for Google Meet',
-      text: 'Bots will ask to join by name — admit them in Meet once they knock.',
-    }
-  }
-  if (!summary.chromeReady) {
-    return {
-      title: 'Google Chrome is required for Meet',
-      text: 'Install Google Chrome, then add an account from Manage.',
-    }
-  }
-  if (summary.available < count) {
-    // The strip already carries the numbers; this just says where to go.
-    return {
-      title: 'More Google accounts needed',
-      text: 'Meet needs one signed-in account per bot — add them from Manage.',
-    }
-  }
   return {
     title: 'Ready for Google Meet',
-    text: 'Choose camera and microphone state, then send the signed-in accounts.',
+    text: 'Bots will ask to join by name — admit them in Meet once they knock.',
   }
 }
 
@@ -698,92 +572,15 @@ const renderMeetBar = () => {
     bar.hidden = true
     return
   }
-  const mode = meetMode()
-  const running = Boolean(S.state?.session?.meetMode)
-  for (const button of $$('[data-meet-mode]')) {
-    button.setAttribute('aria-pressed', String(button.dataset.meetMode === mode))
-    // A running session's bots are already one kind or the other.
-    button.disabled = running || (button.dataset.meetMode === 'guest' && !guestsSupported())
-    if (button.dataset.meetMode === 'guest') {
-      button.title = guestsSupported() ? '' : 'Meet guests need macOS'
-    }
-  }
-  const summary = meetProfiles()
-  const wanted = Math.max(1, Number($('#count').value) || 1)
-  const short = mode === 'account' && summary.chromeReady && summary.available < wanted
+  const info = meetInfo()
   bar.hidden = false
-  bar.classList.toggle('-short', short || !summary.chromeReady)
-  $('#accountsBtn').hidden = mode !== 'account'
-  $('#meetBarText').innerHTML =
-    mode === 'guest'
-      ? !summary.chromeReady
-        ? 'needs <b>Google Chrome</b> installed'
-        : 'no setup — the host admits them'
-      : !summary.chromeReady
-        ? 'needs <b>Google Chrome</b> installed'
-        : short
-          ? `needs <b>${wanted}</b> accounts · <b>${summary.available}</b> ready`
-          : `<b>${summary.available}</b> account${summary.available === 1 ? '' : 's'} ready`
+  bar.classList.toggle('-short', meetUnavailable())
+  $('#meetBarText').innerHTML = !info.macOS
+    ? 'need <b>macOS</b>'
+    : !info.chromeReady
+      ? 'need <b>Google Chrome</b> installed'
+      : 'no setup — the host admits them'
 }
-const setupAccount = async (id, button) => {
-  button.disabled = true
-  try {
-    await post('/api/meet-profiles/setup', id ? { id } : {})
-    // The row now confirms the sign-in the moment it lands, so the only thing
-    // left to say is the one step that is genuinely still required.
-    toast('Chrome opened — sign in there, then close that window.', '-ok')
-  } catch (error) {
-    toast(error.message, '-err')
-    button.disabled = false
-  }
-}
-const checkAccount = async (id, name, button) => {
-  button.disabled = true
-  const label = button.textContent
-  button.textContent = 'Checking…'
-  try {
-    const data = await post('/api/meet-profiles/verify', { id })
-    toast(
-      data.profile?.status === 'ready'
-        ? `${name} is still signed in.`
-        : `${name} needs signing in again.`,
-      data.profile?.status === 'ready' ? '-ok' : '-warn',
-    )
-  } catch (error) {
-    toast(error.message, '-err')
-  } finally {
-    button.textContent = label
-    button.disabled = false
-  }
-}
-const removeAccount = async (id, name, button) => {
-  if (!confirm(`Remove ${name}'s saved Call Bots session? The Google account itself is not deleted.`)) return
-  button.disabled = true
-  try {
-    await post('/api/meet-profiles/remove', { id })
-    toast(`${name}'s saved session was removed.`, '-ok')
-  } catch (error) {
-    toast(error.message, '-err')
-    button.disabled = false
-  }
-}
-const openAccounts = () => { $('#accountsModal').hidden = false }
-$('#accountsBtn').onclick = openAccounts
-for (const button of $$('[data-meet-mode]')) {
-  button.onclick = () => {
-    S.meetMode = button.dataset.meetMode
-    syncPlatformUi()
-  }
-}
-$('#accountsClose').onclick = () => { $('#accountsModal').hidden = true }
-$('#accountsModal').onclick = (event) => {
-  if (event.target === $('#accountsModal')) $('#accountsModal').hidden = true
-}
-$('#accountAdd').onclick = (event) => setupAccount(null, event.currentTarget)
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !$('#accountsModal').hidden) $('#accountsModal').hidden = true
-})
-
 /* ---------- saved label ---------- */
 const LABEL_STORAGE_KEY = 'call-bots-label'
 const botLabelInput = $('#botLabel')
@@ -797,11 +594,9 @@ botLabelInput.oninput = () => {
 const syncPlatformUi = () => {
   const id = platformId()
   const caps = capabilities()
-  const summary = meetProfiles()
   const platform = $('#platformPill')
   platform.hidden = id === null
   if (id) platform.querySelector('b').textContent = id === 'meet' ? 'Google Meet' : 'Aloqa'
-  $('#labelField').hidden = id === 'meet' && meetMode() === 'account'
   $('#codecToggle').hidden = !caps.codecs
   $('#allbar [data-capability="screen"]').hidden = !caps.screen
   $('#allbar [data-capability="codecs"]').hidden = !caps.codecs
@@ -809,26 +604,18 @@ const syncPlatformUi = () => {
     $('#joinCodecs').hidden = true
     $('#codecToggle').setAttribute('aria-expanded', 'false')
   }
-  renderAccounts()
   renderMeetBar()
 
   const status = S.state?.status
   const busy = status === 'joining' || status === 'stopping'
-  // Guests run on the bundled Chromium like Aloqa bots; only accounts need the
-  // real Chrome their saved profiles belong to.
-  // Both ways into Meet run on the real Google Chrome — accounts reopen their
-  // saved profiles in it, and the guests' browser is a copy of it.
+  // Meet guests run in a copy of the real Google Chrome, on a Mac; Aloqa bots
+  // run on the bundled Chromium.
   const browserUnavailable = S.state && (
     id === 'meet'
-      ? !summary.chromeReady
+      ? meetUnavailable()
       : (!S.state.browserReady || S.state.browserInstalling)
   )
-  const count = Math.max(1, Number($('#count').value) || 1)
-  const meetUnavailable =
-    id === 'meet' &&
-    meetMode() === 'account' &&
-    (!summary.chromeReady || summary.available < count)
-  $('#goBtn').disabled = Boolean(busy || browserUnavailable || meetUnavailable)
+  $('#goBtn').disabled = Boolean(busy || browserUnavailable)
   if (id === 'meet' && (S.state?.session?.guests ?? []).length === 0) {
     showMeetEmptyState(status === 'joining')
   }
@@ -857,8 +644,7 @@ for (const device of devices) {
 $('#goBtn').onclick = async () => {
   const btn = $('#goBtn')
   const guests = Math.max(1, Number($('#count').value) || 1)
-  const botLabel =
-    platformId() === 'meet' && meetMode() === 'account' ? '' : $('#botLabel').value.trim()
+  const botLabel = $('#botLabel').value.trim()
   const running = S.state?.status === 'running'
   const buttonLabel = btn.textContent
   btn.disabled = true
@@ -872,7 +658,7 @@ $('#goBtn').onclick = async () => {
       else toast(`${res.added} bot(s) joined${res.failed ? `, ${res.failed} failed` : ''}`, res.failed ? '-warn' : '-ok')
     } else {
       await post('/api/start', {
-        link: $('#link').value.trim(), guests, label: botLabel, meetMode: S.meetMode,
+        link: $('#link').value.trim(), guests, label: botLabel,
         camera: S.camOn, mic: S.micOn, ...joinCodecs(),
       })
     }
@@ -1176,7 +962,6 @@ const buildCard = (guest) => {
         <div class="ava" style="background:${esc(guest.color)}">${esc(guest.label.trim().charAt(0).toUpperCase() || 'G')}</div>
         <div style="min-width:0">
           <div class="nm">${esc(guest.label)}</div>
-          <div class="sub" data-account hidden></div>
         </div>
         <span class="gap"></span>
         <button class="ibtn -pin" data-pin aria-pressed="false"
@@ -1253,9 +1038,6 @@ const updateCard = (guest, grid) => {
   pin.setAttribute('aria-pressed', String(pinned))
   pin.title = pinned ? 'Unpin — send it back to its batch' : 'Pin to the top'
   $('.who .nm', card).textContent = guest.label
-  const account = $('[data-account]', card)
-  account.hidden = !guest.account
-  account.textContent = guest.account ? `Google account ${guest.account.accountNumber}` : ''
   const failed = guest.state.startsWith('error')
   const base = failed ? 'error' : guest.state
   const pill = $('.thumb .pill', card)
@@ -1264,14 +1046,6 @@ const updateCard = (guest, grid) => {
   card.classList.toggle('has-error', Boolean(guest.lastError) && failed)
   const err = $('.err', card)
   err.textContent = guest.lastError ?? ''
-  // A failure about the account is the one failure with a fix one click away.
-  if (guest.lastError && /signed out|Google account|reconnect it/iu.test(guest.lastError)) {
-    const fix = el('button', 'lnk')
-    fix.type = 'button'
-    fix.textContent = 'Manage accounts'
-    fix.onclick = openAccounts
-    err.append(fix)
-  }
   const note = $('[data-note]', card)
   note.hidden = !guest.note
   note.textContent = guest.note ?? ''

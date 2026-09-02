@@ -167,10 +167,6 @@ const drive = async (browser, {
   const admission = []
   const ctx = { page, target, displayName: 'Bot 1', log, fail,
     options: { startCam: false, startMic: false },
-    // A guest bot is exactly one that was handed no profile.
-    meetProfile: asGuest
-      ? null
-      : { displayName: 'Google Tester', markNeedsSignIn: () => {} },
     setWaitingAdmission: (waiting) => admission.push(waiting),
     prepareScreen: async () => { screenPrepared = true } }
 
@@ -179,7 +175,7 @@ const drive = async (browser, {
     check('joins the call', true)
     check('reports the call id', callId === expectCallId, `got ${JSON.stringify(callId)}`)
     if (expectAdmission) {
-      check('reports that the account is awaiting admission',
+      check('reports that the bot is awaiting admission',
         admission.includes(true) && admission.at(-1) === false, JSON.stringify(admission))
     }
 
@@ -368,7 +364,6 @@ const expectFailure = async (title, { link, adapter, body, expect, within = 10, 
   await context.route('**/*', (route) =>
     route.fulfill({ status: 200, contentType: 'text/html', body }))
   const page = await context.newPage()
-  let markedSignedOut = false
   const ctx = {
     page,
     target: resolveLink(link),
@@ -376,12 +371,6 @@ const expectFailure = async (title, { link, adapter, body, expect, within = 10, 
     log,
     fail,
     options: { startCam: false, startMic: false },
-    meetProfile: asGuest
-      ? null
-      : {
-          displayName: 'Google Tester',
-          markNeedsSignIn: () => { markedSignedOut = true },
-        },
     setWaitingAdmission: () => {},
   }
   let message = null
@@ -398,7 +387,6 @@ const expectFailure = async (title, { link, adapter, body, expect, within = 10, 
   // reading it leaves the bot claiming to be joining while the page says no.
   check('reports the refusal promptly', seconds < within, `took ${seconds.toFixed(1)}s`)
   if (/signed out/iu.test(message ?? '')) {
-    check('marks the saved profile as needing sign-in', markedSignedOut)
   }
   await context.close()
 }
@@ -431,10 +419,9 @@ await expectFailure('Google Meet — offered a call with no devices', {
   expect: /no camera or microphone/iu,
 })
 
-// Meet renders in the ACCOUNT's language, which overrides the hl in the link.
 // A page with Meet's device toggles and none of its English controls is a
 // language problem, and saying so beats timing out on a selector.
-await expectFailure('Google Meet — account is not in English', {
+await expectFailure('Google Meet — Meet is not in English', {
   link: 'https://meet.google.com/abc-defg-hij',
   adapter: meet,
   body: `<!doctype html><body>
@@ -469,7 +456,7 @@ await expectFailure('Google Meet — removed from the call', {
   link: 'https://meet.google.com/abc-defg-hij',
   adapter: meet,
   body: `<!doctype html><body>You've been removed from the meeting</body>`,
-  expect: /refused this account.*removed/iu,
+  expect: /refused this guest.*removed/iu,
 })
 
 await expectFailure('Google Meet — admission refused', {
@@ -481,7 +468,7 @@ await expectFailure('Google Meet — admission refused', {
     <script>document.getElementById('join').onclick = () => {
       document.getElementById('refused').hidden = false
     }</script></body>`,
-  expect: /Google Meet refused this account: You can't join this video call/iu,
+  expect: /does not take guests/iu,
 })
 
 await browser.close()

@@ -48,7 +48,7 @@ const state = (status, session = null, extra = {}) => ({
   browserReady: true,
   browserInstalling: false,
   browserProgress: null,
-  meetProfiles: { profiles: [], available: 0, chromeReady: true },
+  meet: { chromeReady: true, macOS: true },
   session,
   verify: null,
   ...extra,
@@ -93,20 +93,10 @@ const roster = (states, sizes = [states.length]) => {
   }
 }
 
-const meetProfilesState = {
-  profiles: [
-    { id: '11111111-1111-4111-8111-111111111111', displayName: 'Meet Tester', number: 1, status: 'ready' },
-    { id: '22222222-2222-4222-8222-222222222222', displayName: 'Meet Tester', number: 2, status: 'ready' },
-  ],
-  available: 2,
-  chromeReady: true,
-}
-
 const meetRoster = (guestState = 'in-call', waitingAdmission = false) => ({
   meetingId: 'abc-defg-hij',
   inviteLink: 'https://meet.google.com/abc-defg-hij?hl=en',
   platform: 'Google Meet',
-  meetMode: 'account',
   capabilities: { mic: true, camera: true, screen: false, rtc: true, codecs: false },
   batches: [{ id: 1, at: 1_755_000_000_000, size: 1 }],
   guests: [{
@@ -122,7 +112,6 @@ const meetRoster = (guestState = 'in-call', waitingAdmission = false) => ({
     screen: null,
     rtc: null,
     codecs: { audio: null, video: null, screen: null },
-    account: { id: meetProfilesState.profiles[0].id, displayName: 'Meet Tester', accountNumber: 1 },
     note: null,
     lastError: null,
   }],
@@ -196,9 +185,6 @@ try {
 
   const stops = []
   const actions = []
-  const profileSetups = []
-  const profileRemovals = []
-  const profileVerifies = []
   await context.route('**/*', (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -215,22 +201,6 @@ try {
     if (request.method() === 'POST' && path === '/api/stop') {
       stops.push(path)
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
-    }
-    if (request.method() === 'POST' && path === '/api/meet-profiles/setup') {
-      profileSetups.push(request.postDataJSON())
-      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
-    }
-    if (request.method() === 'POST' && path === '/api/meet-profiles/remove') {
-      profileRemovals.push(request.postDataJSON())
-      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
-    }
-    if (request.method() === 'POST' && path === '/api/meet-profiles/verify') {
-      profileVerifies.push(request.postDataJSON())
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: '{"ok":true,"profile":{"status":"needs-sign-in"}}',
-      })
     }
     if (request.method() === 'POST' && path === '/api/action') {
       actions.push(request.postDataJSON())
@@ -296,110 +266,52 @@ try {
   console.log('\nGoogle Meet stays out of the way until it is asked for')
   // Meet is a rare platform. The rule this section defends is that a dashboard
   // doing Aloqa work contains no Meet pixels at all.
-  await push(state('idle', null, { meetProfiles: meetProfilesState }))
+  await push(state('idle'))
   check('an empty link shows nothing about Meet',
     !(await page.locator('#meetBar').isVisible()))
   await page.locator('#link').fill('https://aloqa.test/join/AbCdEfGhIjKlMnOpQrSt')
   check('an Aloqa link shows nothing about Meet',
     !(await page.locator('#meetBar').isVisible()))
-  check('and no Google accounts button sits in the header',
-    (await page.locator('header #accountsBtn').count()) === 0)
 
   await page.locator('#link').fill('https://meet.google.com/abc-defg-hij')
   check('a Meet link is detected before starting',
     (await page.locator('#platformPill').textContent()) === 'Platform Google Meet')
   check('and only then does one line about Meet appear',
     await page.locator('#meetBar').isVisible())
-
-  // Guests are the default because they need nothing set up. A dashboard with
-  // no Google account configured at all must still be able to send Meet bots.
-  check('it offers guests first, with nothing to manage',
-    (await page.locator('[data-meet-mode=guest]').getAttribute('aria-pressed')) === 'true' &&
-      !(await page.locator('#accountsBtn').isVisible()) &&
-      (await page.locator('#meetBarText').textContent()).includes('no setup'),
+  // Guests need nothing set up, and there is nothing else: no accounts, no
+  // panel to manage them, no mode to pick.
+  check('the line says guests need no setup',
+    (await page.locator('#meetBarText').textContent()).includes('no setup'),
     await page.locator('#meetBarText').textContent())
-  check('a guest batch is sendable however many accounts exist',
-    !(await goBtn.isDisabled()))
-  // Two places used to write this line, and the later one won: somebody
-  // sending guests was told to go and add Google accounts.
-  check('and the empty state talks about guests, not accounts',
+  check('and nothing about Google accounts remains in the page',
+    (await page.locator('#accountsBtn, #accountsModal, [data-meet-mode]').count()) === 0)
+  check('a guest batch is sendable', !(await goBtn.isDisabled()))
+  check('and the empty state talks about admitting guests',
     /admit them in Meet/u.test(await page.locator('#emptyText').textContent()),
     await page.locator('#emptyText').textContent())
-  check('and a guest keeps the custom label an account bot cannot have',
-    await page.locator('#labelField').isVisible())
-
-  await page.locator('[data-meet-mode=account]').click()
-  check('choosing accounts brings out the readiness count and Manage',
-    (await page.locator('#meetBarText').textContent()).includes('2 account') &&
-      await page.locator('#accountsBtn').isVisible(),
-    await page.locator('#meetBarText').textContent())
+  check('and a guest keeps its custom label', await page.locator('#labelField').isVisible())
+  check('while the codecs Meet ignores stay hidden', !(await page.locator('#codecToggle').isVisible()))
   await page.setViewportSize({ width: 980, height: 800 })
   check('the header fits the app window at its minimum width',
     await page.locator('header').evaluate((header) => header.scrollWidth <= header.clientWidth),
     await page.locator('header').evaluate((header) => `${header.scrollWidth}/${header.clientWidth}`))
   await page.setViewportSize({ width: 1280, height: 800 })
-  check('an account bot loses the label it cannot use, and the codecs Meet ignores',
-    !(await page.locator('#labelField').isVisible()) &&
-      !(await page.locator('#codecToggle').isVisible()))
-  await page.locator('#count').fill('3')
-  check('a Meet batch larger than account capacity is blocked before sending',
-    await goBtn.isDisabled())
-  check('and the strip says how far short it is',
-    (await page.locator('#meetBarText').textContent()).includes('3') &&
-      (await page.locator('#meetBar').getAttribute('class')).includes('-short'),
+
+  // A machine without what guests run on says so instead of failing a send.
+  await push(state('idle', null, { meet: { chromeReady: false, macOS: true } }))
+  check('without Google Chrome the line says so and the send waits',
+    (await page.locator('#meetBarText').textContent()).includes('Google Chrome') && await goBtn.isDisabled(),
     await page.locator('#meetBarText').textContent())
-  await page.locator('#count').fill('2')
-  check('enough ready profiles enable the Meet send', !(await goBtn.isDisabled()))
+  await push(state('idle', null, { meet: { chromeReady: true, macOS: false } }))
+  check('off macOS the line says so and the send waits',
+    (await page.locator('#meetBarText').textContent()).includes('macOS') && await goBtn.isDisabled(),
+    await page.locator('#meetBarText').textContent())
+  await push(state('idle'))
+  check('with both present the send is back', !(await goBtn.isDisabled()))
 
-  await page.locator('#meetBar #accountsBtn').click()
-  check('the Google Accounts panel lists safe display names and statuses',
-    await page.locator('#accountsModal').isVisible() &&
-      (await page.locator('#accountList .account').count()) === 2 &&
-      (await page.locator('#accountList').textContent()).includes('Meet Tester') &&
-      !(await page.locator('#accountList').textContent()).includes('@'))
-  // A saved session Google has since expired is indistinguishable from a live
-  // one until something asks. Check is what asks, before a batch does.
-  const verifyRequest = page.waitForRequest(
-    (request) => request.method() === 'POST' && request.url().endsWith('/api/meet-profiles/verify'),
-  )
-  await page.locator('#accountList [data-check]').first().click()
-  await verifyRequest
-  const verdict = await page
-    .locator('.toast.-warn', { hasText: 'needs signing in again' })
-    .first()
-    .textContent()
-    .catch(() => null)
-  check('Check asks about the selected account and reports what came back',
-    profileVerifies[0]?.id === meetProfilesState.profiles[0].id && Boolean(verdict),
-    `${JSON.stringify(profileVerifies[0])} ${verdict ?? 'no verdict shown'}`)
-
-  const reconnectRequest = page.waitForRequest(
-    (request) => request.method() === 'POST' && request.url().endsWith('/api/meet-profiles/setup'),
-  )
-  await page.locator('#accountList [data-connect]').first().click()
-  await reconnectRequest
-  check('Reconnect targets the selected app-owned profile',
-    profileSetups[0]?.id === meetProfilesState.profiles[0].id, JSON.stringify(profileSetups[0]))
-  await push(state('idle', null, { meetProfiles: meetProfilesState }))
-  page.once('dialog', (dialog) => dialog.accept())
-  const removeRequest = page.waitForRequest(
-    (request) => request.method() === 'POST' && request.url().endsWith('/api/meet-profiles/remove'),
-  )
-  await page.locator('#accountList [data-remove]').nth(1).click()
-  await removeRequest
-  check('Remove targets only the selected saved local profile',
-    profileRemovals[0]?.id === meetProfilesState.profiles[1].id, JSON.stringify(profileRemovals[0]))
-  await page.locator('#accountsClose').click()
-
-  const meetInUse = {
-    ...meetProfilesState,
-    profiles: meetProfilesState.profiles.map((profile) => ({ ...profile, status: 'in-use' })),
-    available: 0,
-  }
-  await push(state('joining', meetRoster('joining', true), { meetProfiles: meetInUse }))
-  check('Meet cards use the Google account display name',
-    (await page.locator('.card .who .nm').textContent()) === 'Meet Tester' &&
-      (await page.locator('.card [data-account]').textContent()) === 'Google account 1')
+  await push(state('joining', meetRoster('joining', true)))
+  check('Meet cards carry the bot label',
+    (await page.locator('.card .who .nm').textContent()) === 'Meet Tester')
   check('Meet keeps mic, camera, leave, and Stop available while awaiting admission',
     await page.locator('.card [data-act=mic]').isVisible() &&
       await page.locator('.card [data-act=cam]').isVisible() &&
@@ -411,18 +323,17 @@ try {
       !(await page.locator('.card [data-act=share]').isVisible()))
   check('the dashboard notifies the user about lobby admission',
     (await page.locator('.toast.-warn').allTextContents()).some((text) => text.includes('awaiting admission')))
-  await push(state('running', meetRoster(), { meetProfiles: meetInUse }))
+  await push(state('running', meetRoster()))
   check('Meet keeps the fleet mic and camera controls, without share or codecs',
     await page.locator('#allbar').isVisible() &&
       await page.locator('#allbar [data-all=mute]').isVisible() &&
       await page.locator('#allbar [data-all=cam-off]').isVisible() &&
       !(await page.locator('#allbar [data-capability=screen]').isVisible()) &&
       !(await page.locator('#allbar [data-capability=codecs]').isVisible()))
-  check('no unused Meet account means another batch is blocked', await goBtn.isDisabled())
+  check('another guest batch can be added to a running Meet session', !(await goBtn.isDisabled()))
 
-  await push(state('idle', null, { meetProfiles: meetProfilesState }))
+  await push(state('idle'))
   await page.locator('#count').fill('2')
-  await page.locator('[data-meet-mode=guest]').click()
   await page.locator('#link').fill('https://aloqa.test/join/AbCdEfGhIjKlMnOpQrSt')
   check('switching back to Aloqa restores its label and puts Meet away again',
     await page.locator('#labelField').isVisible() &&

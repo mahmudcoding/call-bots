@@ -1,8 +1,9 @@
-// Google Meet — two ways in.
+// Google Meet — as a guest.
 //
-// A bot with a saved Chrome profile joins as that Google account. A bot without
-// one joins as an anonymous guest: it types a name and asks to be let in, the
-// way Aloqa guests do, and needs no account at all.
+// A Meet bot joins anonymously: it types a name and asks to be let in, the way
+// Aloqa guests do, and needs no account at all. (Signed-in account bots were a
+// second way in until 2026-09-03; they needed one Google account per bot and
+// a profile store to manage, and were removed for it.)
 //
 // Guests are not always allowed. Meet refuses anonymous visitors outright for
 // any meeting created by a PERSONAL Google account — no name field, just "You
@@ -40,12 +41,10 @@ const POLL_LOBBY = 2_000
 
 // Measured against live Google Meet on 2 Sep 2026, not assumed:
 //
-// rtc — WORKS, and it is the one that matters. The stream monitor reads a real
-//   connection (1 pc, ~230 kbps outbound video), which is what the camera
-//   watchdog and the dark-camera heal ladder run on. It only works because the
-//   codec shim publishes its connection registry: Meet keeps its peer
-//   connections in module closures where the monitor's own scan cannot reach
-//   them, and without that bridge it reports "no connection" on a live call.
+// rtc — WORKS, and it is the one that matters: the camera watchdog and the
+//   dark-camera heal ladder run on it. A guest window reads its stats out of
+//   chrome://webrtc-internals (see guest-browser.mjs), which sees the peer
+//   connections Meet keeps in module closures out of any page script's reach.
 //
 // screen — DOES NOT WORK. getDisplayMedia hands Meet a live 1920x1080 track and
 //   Meet's own bundle then throws DisconnectedError and never starts
@@ -181,7 +180,7 @@ const looksNonEnglish = (read) =>
 // user looking at the adapter instead of at their meeting code.
 const HOME_PATH = /^\/(?:u\/\d+\/)?(?:home)?$/u
 
-const classify = (read, url, guest) => {
+const classify = (read, url) => {
   if (read.leave) return { stage: 'in-call' }
 
   let host = ''
@@ -196,8 +195,7 @@ const classify = (read, url, guest) => {
   // being asked to introduce itself, an account bot has lost its session. Meet
   // leaves the field on screen after it is filled, so only an EMPTY one is
   // still asking — otherwise a guest retypes its name forever.
-  if (read.nameField && !read.named) return { stage: guest ? 'name-entry' : 'signin' }
-  if (read.nameField && !guest) return { stage: 'signin' }
+  if (read.nameField && !read.named) return { stage: 'name-entry' }
   if (host === 'meet.google.com' && HOME_PATH.test(path)) {
     return {
       stage: 'refused',
@@ -486,26 +484,13 @@ const setScreen = async (ctx, on) => {
   return screenState(page)
 }
 
-const failSignedOut = async ({ meetProfile, fail }) => {
-  meetProfile?.markNeedsSignIn?.()
-  const name = meetProfile?.displayName ?? 'This Google account'
-  await fail(
-    'account',
-    `${name} is signed out — reconnect it in Call Bots → Google accounts`,
-    { screenshot: false },
-  )
-}
-
-// Told apart by whether this bot was given a saved profile. Everything else
-// about the two paths is the same.
 const REFUSED_GUEST =
   'this meeting does not take guests — Meet refuses anonymous visitors for any ' +
-  'meeting created by a personal Google account. Add a Google account in Call ' +
-  'Bots and send the bots on that instead.'
+  'meeting created by a personal Google account. Use a meeting from a Google ' +
+  'Workspace account whose admin allows guests, or ask the host to let them in.'
 
 const join = async (ctx) => {
   const { page, target, log, fail, options, setWaitingAdmission, displayName } = ctx
-  const guest = !ctx.meetProfile
   try {
     await page.goto(target.url, { waitUntil: 'domcontentloaded' })
   } catch (error) {
@@ -549,7 +534,7 @@ const join = async (ctx) => {
     }
     // Sync on a Playwright page, async on a guest window.
     const url = await Promise.resolve(page.url()).catch(() => '')
-    const { stage, detail } = classify(read, url, guest)
+    const { stage, detail } = classify(read, url)
     if (stage !== 'loading') sawMeet = true
     if (process.env.CALL_BOTS_DEBUG_MEET) {
       console.error('[meet]', stage, JSON.stringify({ ...read, headline: read.headline.slice(0, 90) }))
@@ -569,8 +554,7 @@ const join = async (ctx) => {
     if (stage === 'signin') {
       // A guest being asked to sign in has been turned away, not logged out —
       // there is no session here to have expired.
-      if (guest) await fail('entry', REFUSED_GUEST)
-      await failSignedOut(ctx)
+      await fail('entry', REFUSED_GUEST)
     }
 
     if (stage === 'devices-ask') {
@@ -591,12 +575,9 @@ const join = async (ctx) => {
 
     if (stage === 'refused') {
       setWaitingAdmission?.(false)
-      // "You can't join this video call" means one thing to a guest and quite
-      // another to an account, and the fix is not the same.
-      const why =
-        guest && /can'?t join this/iu.test(detail ?? '')
-          ? REFUSED_GUEST
-          : `Google Meet refused this ${guest ? 'guest' : 'account'}: ${detail}`
+      const why = /can'?t join this/iu.test(detail ?? '')
+        ? REFUSED_GUEST
+        : `Google Meet refused this guest: ${detail}`
       await fail(phase === 'entry' ? 'entry' : 'join', why)
     }
 
@@ -684,8 +665,8 @@ const join = async (ctx) => {
       if (Date.now() - nonEnglishSince > 15_000) {
         await fail(
           'entry',
-          'this Google account\'s Meet is not in English — set the account language to English, ' +
-            'or use an account that is (Call Bots reads Meet\'s English controls)',
+          'Meet is not in English here, and Call Bots reads its English controls — ' +
+            'the bots\' browser is started in English, so this is a Meet quirk worth a report',
         )
       }
     } else {

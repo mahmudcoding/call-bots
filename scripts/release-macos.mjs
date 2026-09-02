@@ -183,7 +183,6 @@ try {
   for (const script of [
     'test:guest',
     'test:platforms',
-    'test:meet-profiles',
     'test:cli',
     'test:ui',
     'test:stop',

@@ -57,12 +57,12 @@ const roleStream = (role) => (stream) => {
   return stream.kind === 'video' && stream.role !== 'screen'
 }
 
-// One participant: either an anonymous Aloqa guest or a Google account in its
-// own saved Meet profile. Everything platform-specific — how to get in, where
-// the device toggles are, how to read the participant grid — lives in the
-// adapter under src/platforms; this class only sequences it.
+// One participant: an anonymous guest, in Aloqa or in Google Meet. Everything
+// platform-specific — how to get in, where the device toggles are, how to read
+// the participant grid — lives in the adapter under src/platforms; this class
+// only sequences it.
 export class Guest {
-  constructor(guest, media, options, meetProfile = null) {
+  constructor(guest, media, options) {
     this.user = guest // {n, label, slug, index}
     this.media = media
     this.options = options
@@ -83,14 +83,6 @@ export class Guest {
     this.lastError = null
     this.waitingAdmission = false
     this.platform = null
-    this.meetProfile = meetProfile
-    this.account = meetProfile
-      ? {
-          id: meetProfile.id,
-          displayName: meetProfile.displayName,
-          accountNumber: meetProfile.accountNumber,
-        }
-      : null
     this.closeBrowser = null
     this.screenPage = null
     this.monitorInstall = null // in-flight stream-monitor install, so retries dedupe
@@ -136,13 +128,7 @@ export class Guest {
     if (!platform) throw new Error(`no adapter for platform "${target?.platform}"`)
     this.platform = platform
     this.target = target
-    const launched = await launchGuest(
-      this.user,
-      this.media,
-      this.options,
-      this.codecs,
-      this.meetProfile,
-    )
+    const launched = await launchGuest(this.user, this.media, this.options, this.codecs)
     this.browser = launched.browser
     this.context = launched.context
     this.page = launched.page
@@ -177,7 +163,6 @@ export class Guest {
       log: this.log,
       fail: this.#fail,
       options: this.options,
-      meetProfile: this.meetProfile,
       setWaitingAdmission: (waiting) => {
         this.waitingAdmission = Boolean(waiting)
       },
@@ -835,11 +820,6 @@ export class Guest {
     return this.#shot(name)
   }
 
-  releaseProfile() {
-    this.meetProfile?.release?.()
-    this.meetProfile = null
-  }
-
   async #closeBrowserProcess() {
     const close = this.closeBrowser
     this.closeBrowser = null
@@ -854,22 +834,11 @@ export class Guest {
     this.page = null
   }
 
-  // A Meet account must become available again as soon as its bot fails. Keep
-  // the error on the card, but close the failed browser and release its lease.
-  async closeAfterFailure() {
-    try {
-      await this.#closeBrowserProcess()
-    } finally {
-      this.releaseProfile()
-    }
-  }
-
   async teardown() {
     // A guest has neither a browser nor a context — its window is the only
     // thing to close, and closeBrowser is what knows how.
     if (!this.browser && !this.context && !this.closeBrowser) {
       this.waitingAdmission = false
-      this.releaseProfile()
       return
     }
     try {
@@ -881,7 +850,6 @@ export class Guest {
       await this.#closeBrowserProcess()
     } finally {
       this.waitingAdmission = false
-      this.releaseProfile()
       this.state = 'closed'
       this.log.info('closed')
     }

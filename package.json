@@ -15,7 +15,6 @@
     "clean": "node src/cli.mjs clean",
     "postinstall": "node scripts/postinstall.mjs",
     "test:platforms": "node scripts/test-platforms.mjs",
-    "test:meet-profiles": "node scripts/test-meet-profiles.mjs",
     "test:cli": "node scripts/test-cli.mjs",
     "test:guest": "node scripts/test-guest.mjs",
     "test:ui": "node scripts/test-ui.mjs",
