@@ -52,38 +52,46 @@ const tell = (body) => `tell application id ${quote(BUNDLE_ID)}\n${body}\nend te
 // a different problem with a different fix, and it has to be said out loud.
 const NOT_PERMITTED = /not authorized to send apple events|-1743|not permitted/iu
 const PERMISSION_HELP =
-  'Call Bots needs permission to control System Events and the Call Bots browser — ' +
+  'Call Bots needs permission to control the Call Bots browser — ' +
   'System Settings → Privacy & Security → Automation → Call Bots'
 
-const browserRunning = async (timeout = 10_000) => {
+// Asked of LaunchServices directly, which is exactly what `tell application
+// id` consults before deciding whether to launch — and it needs no Automation
+// permission at all. The earlier System Events check did: from the packaged
+// app every one of those queries failed, every liveness answer was wrong, and
+// the whole guest path fell over while the same code ran clean from a shell.
+const browserRunning = async () => {
   let out
   try {
-    out = await osascript(
-      `tell application "System Events" to return (exists (first application process whose bundle identifier is ${quote(BUNDLE_ID)}))`,
-      timeout,
-    )
-  } catch (error) {
-    if (NOT_PERMITTED.test(String(error.message))) throw new Error(PERMISSION_HELP)
+    ;({ stdout: out } = await run('lsappinfo', ['find', `bundleid=${BUNDLE_ID}`], { timeout: 10_000 }))
+  } catch {
     return false
   }
-  return out.trim() === 'true'
+  return /^ASN:/u.test(out.trim())
 }
 
-// Asked once, deliberately, before any window exists: macOS shows its
-// Automation prompt on the first Apple Event, and a prompt that appears while
-// bots are already launching gets answered late or not at all — measured as a
-// guest that never navigated and two stray windows in the user's own Chrome.
+const processCount = async () => {
+  try {
+    const { stdout } = await run('lsappinfo', ['find', `bundleid=${BUNDLE_ID}`], { timeout: 10_000 })
+    return String(stdout.split('\n').filter((line) => /^ASN:/u.test(line.trim())).length)
+  } catch {
+    return '?'
+  }
+}
+
+// One Apple Event to the bot browser itself, sent before any guest window
+// exists, so macOS's Automation prompt for it appears when a person can answer
+// it — not while bots are already launching, which was measured as a guest
+// that never navigated. The call blocks while the dialog is up and gets the
+// time a person needs.
 const preflightPermissions = async () => {
-  // The call blocks while macOS's dialog is up, so it gets the time a person
-  // needs to read it and click Allow — not the ten seconds a status check gets.
-  await browserRunning(120_000)
+  if (!(await browserRunning())) return
+  try {
+    await osascript(tell('return count of windows'), 120_000)
+  } catch (error) {
+    if (NOT_PERMITTED.test(String(error.message))) throw new Error(PERMISSION_HELP)
+  }
 }
-
-const processCount = async () =>
-  osascript(
-    `tell application "System Events" to return count of (application processes whose bundle identifier is ${quote(BUNDLE_ID)})`,
-    10_000,
-  ).catch(() => '?')
 
 const speak = async (body) => {
   if (!(await browserRunning())) throw new Error('the Call Bots browser is not running')
@@ -234,7 +242,6 @@ const readInternals = async () => {
 }
 
 const startShared = async (media, options) => {
-  await preflightPermissions()
   const bundle = await ensureGuestBundle()
   const userDataDir = mkdtempSync(join(tmpdir(), 'call-bots-meet-guests-'))
   // Scripting is a per-profile preference with no command-line flag, and it has
@@ -291,8 +298,13 @@ const startShared = async (media, options) => {
   // Event launches a second copy into the user's Chrome.
   if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] spawned pid', child.pid)
   const deadline = Date.now() + READY_TIMEOUT
+  let asked = false
   while (Date.now() < deadline) {
     if (await browserRunning()) {
+      if (!asked) {
+        asked = true
+        await preflightPermissions()
+      }
       const ids = await windowIds()
       if (ids.length > 0) return { child, userDataDir, windows: new Set(), spare: ids[0] }
     }
