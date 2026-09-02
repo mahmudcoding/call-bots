@@ -411,6 +411,9 @@
       <div class="meetbar" id="meetBar" hidden>
         <span class="lead">Guests</span>
         <span id="meetBarText"></span>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="windowsBtn" hidden
+          title="Bot windows are hidden by default; show them to watch a bot's own view">Show windows</button>
       </div>
     </div>
 
@@ -580,6 +583,25 @@ const renderMeetBar = () => {
     : !info.chromeReady
       ? 'need <b>Google Chrome</b> installed'
       : 'no setup — the host admits them'
+  // The bots' windows exist but stay hidden, like every other bot's browser;
+  // the switch is there for watching one, and only while there is one.
+  const session = S.state?.session
+  const live = Boolean(session) && ['joining', 'running'].includes(S.state?.status)
+  const windows = $('#windowsBtn')
+  windows.hidden = !live
+  windows.textContent = session?.windowsVisible ? 'Hide windows' : 'Show windows'
+}
+$('#windowsBtn').onclick = async (event) => {
+  const button = event.currentTarget
+  const visible = !S.state?.session?.windowsVisible
+  button.disabled = true
+  try {
+    await post('/api/windows', { visible })
+  } catch (error) {
+    toast(error.message, '-err')
+  } finally {
+    button.disabled = false
+  }
 }
 /* ---------- saved label ---------- */
 const LABEL_STORAGE_KEY = 'call-bots-label'

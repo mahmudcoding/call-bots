@@ -181,7 +181,10 @@ Clicking is plain `element.click()`.
   `scripts/macos-app/aesend.swift` builds the target descriptor from the pid
   and sends the dozen events the driver needs (`count`, `window-id`,
   `new-window`, `url`, `set-url`, `exec` with the JavaScript on stdin,
-  `minimize`, `bounds`, `get-bounds`, `close`, `quit`). Measured: twelve
+  `minimize`, `bounds`, `get-bounds`, `close`, `hide`, `unhide`, `quit`).
+  `hide`/`unhide` are not Apple Events but `NSRunningApplication`, which
+  needs no permission; the bots' browser is hidden as an application by
+  default (`--headed` shows it, the dashboard toggles it). Measured: twelve
   concurrent calls to two processes, every answer from the right one. The app
   build compiles it to `<projectRoot>/native/aesend`; a source checkout
   compiles it with `swiftc` into the data directory on first use. Chrome's
@@ -205,7 +208,14 @@ Clicking is plain `element.click()`.
   Measured at that size in a three-person call: 960×540 at ~900 kbps per
   remote stream, ~2.3 Mbps down per guest, three guests at a load average
   of 11 on the 8-core M3.
-- **Visible windows**, N of them.
+- **Windows, N of them — hidden by default.** Hiding costs nothing:
+  minimised for half a minute and hidden as an application for 150 s, both
+  guests kept sending ~2.1 Mbps and receiving 1280×720 at 30 fps, thumbnails
+  included. `document.visibilityState` reads `hidden` in a hidden window, and
+  Meet would pause video for it, but nothing does with
+  `--disable-backgrounding-occluded-windows --disable-renderer-backgrounding`
+  on the launch line. Hidden from before the page loads, the document keeps
+  reading `visible` until the first show/hide.
 - **Permission prompts the first time.** One Automation prompt — the app asking
   to control the *Call Bots browser* — because driving Chrome without a debugger
   *is* Apple Events. It is sent deliberately as the first event after the

@@ -271,6 +271,18 @@ export class Roster {
     return [...removed].map((guest) => guest.label)
   }
 
+  // Bots with a window of their own are shown or hidden together, and bots
+  // added afterwards arrive the way the session is currently set.
+  async setWindowsVisible(visible) {
+    this.options.headed = Boolean(visible)
+    const shown = await Promise.all(
+      this.guests
+        .filter((guest) => guest.state !== 'closed')
+        .map((guest) => guest.setWindowVisible(visible).catch(() => false)),
+    )
+    return shown.filter(Boolean).length
+  }
+
   // Asking each bot in turn costs a round trip per bot per poll, which stops
   // answering at all once there are enough of them on a busy machine. Ask them
   // all at once, and never let one stuck browser hold up the answer.
@@ -322,6 +334,7 @@ export class Roster {
       inviteLink: this.callUrl,
       platform: this.platform,
       capabilities: platformById(this.target?.platform)?.capabilities ?? null,
+      windowsVisible: Boolean(this.options.headed),
       batches,
       guests,
     }

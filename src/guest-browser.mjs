@@ -569,6 +569,7 @@ export class GuestWindow {
     this.proc = proc
     this.windowId = windowId
     this.label = label
+    this.visible = true
     // Names proved for tracks, kept until the track leaves the stats: a tile
     // that the grid unmounts for a moment must not turn its row back into
     // "Video · 1234" and back.
@@ -605,7 +606,21 @@ export class GuestWindow {
       console.error('[guest-browser] pid', proc.child.pid, 'window', windowId, 'for', tag)
     }
     await placeWindow(proc, windowId, slots++)
-    return new GuestWindow(proc, windowId, tag, label)
+    const window = new GuestWindow(proc, windowId, tag, label)
+    // Out of sight unless asked for, like every other bot's browser. Hidden,
+    // not smaller: measured minimised for half a minute, both guests kept
+    // sending 2.1 Mbps and receiving 1280×720 at 30 fps, thumbnails included.
+    if (!options.headed) await window.setVisible(false)
+    return window
+  }
+
+  // Show or hide this guest's whole browser — its Meet window and the stats
+  // window with it. The application is hidden, not the window minimised, so
+  // nothing of it sits in the Dock either.
+  async setVisible(visible) {
+    if (this.closed) return
+    await this.#speak([visible ? 'unhide' : 'hide']).catch(() => {})
+    this.visible = visible
   }
 
   // Refresh the track → name map from the tiles, at most every few seconds,

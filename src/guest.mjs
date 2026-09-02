@@ -271,6 +271,14 @@ export class Guest {
     return this.platform ? this.platform.camState(this.page) : Promise.resolve('unknown')
   }
 
+  // Show or hide the bot's own browser window, where the bot has one to show:
+  // a Meet guest is a real window; an Aloqa bot is headless and has none.
+  async setWindowVisible(visible) {
+    if (typeof this.page?.setVisible !== 'function') return false
+    await this.page.setVisible(visible)
+    return true
+  }
+
   // Every control's state, in one read where the platform offers one.
   async controls() {
     if (!this.platform) return { mic: 'unknown', cam: 'unknown', screen: 'unknown' }

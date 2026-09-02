@@ -519,6 +519,14 @@ export const startServer = async ({ port = 4610, open = true }) => {
         json(response, 200, { ok: true, results })
         return
       }
+      if (request.method === 'POST' && url.pathname === '/api/windows') {
+        const body = await readBody(request)
+        if (!session.roster) throw new Error('no running session')
+        const shown = await session.roster.setWindowsVisible(body.visible !== false)
+        json(response, 200, { ok: true, windows: shown })
+        broadcast(await stateSnapshot())
+        return
+      }
       if (request.method === 'POST' && url.pathname === '/api/stop') {
         stopSession()
         json(response, 200, { ok: true })

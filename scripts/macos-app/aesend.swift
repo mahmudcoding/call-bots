@@ -23,8 +23,11 @@
 //   aesend <pid> bounds <window-id> <x> <y> <w> <h>
 //   aesend <pid> get-bounds <window-id>     x y w h
 //   aesend <pid> close <window-id>
+//   aesend <pid> hide                       hide the application (all its windows)
+//   aesend <pid> unhide                     show it again
 //   aesend <pid> quit
 
+import AppKit
 import Foundation
 
 func fourCC(_ s: String) -> OSType {
@@ -239,6 +242,15 @@ case "close":
 case "quit":
   _ = send(classApp, eventQuit, params: [])
   print("ok")
+
+// Not an Apple Event: the workspace hides and shows an application on
+// anyone's say-so, no permission asked. A hidden application's windows are
+// off screen and out of the Dock's window list, and Chrome — launched with
+// occlusion backgrounding off — keeps rendering them all the same.
+case "hide", "unhide":
+  guard let running = NSRunningApplication(processIdentifier: pid) else { fail("Apple Event error -600 no such process") }
+  let done = command == "hide" ? running.hide() : running.unhide()
+  print(done ? "ok" : "not " + command + "den")
 
 default:
   fail("unknown command \(command)")

@@ -67,6 +67,13 @@ What a guest needs, all on the Mac running Call Bots:
 - **macOS.** There are no Meet bots on Linux: the guest windows are driven
   through Apple Events, which do not exist there.
 
+The windows stay hidden, like every other bot's browser — the bot browser is
+hidden as an application, so nothing of it is on screen or in the Dock's
+window list, and a hidden bot sends and receives exactly what a visible one
+does (measured for minutes at a time). **Show windows** on the Meet line
+brings them all up when you want to watch one; **Hide windows** puts them
+away again. From the terminal, `--headed` shows them.
+
 Every guest is its own Chrome process with its own camera clip and voice — the
 five cycle through the bots exactly as they do for Aloqa. (Chrome's fake
 devices are per process, and addressing one process among several took a

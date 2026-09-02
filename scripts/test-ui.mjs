@@ -331,6 +331,9 @@ try {
       !(await page.locator('#allbar [data-capability=screen]').isVisible()) &&
       !(await page.locator('#allbar [data-capability=codecs]').isVisible()))
   check('another guest batch can be added to a running Meet session', !(await goBtn.isDisabled()))
+  check('the Meet line offers to show the hidden bot windows while bots are in',
+    await page.locator('#windowsBtn').isVisible() &&
+      (await page.locator('#windowsBtn').textContent()) === 'Show windows')
 
   await push(state('idle'))
   await page.locator('#count').fill('2')
