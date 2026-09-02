@@ -25,12 +25,18 @@ import { promisify } from 'node:util'
 
 import { RUN_MARKER, googleChromePath } from './browser.mjs'
 import { baseDir } from './config.mjs'
+import { plain as log } from './log.mjs'
 
 const run = promisify(execFile)
 
 export const BUNDLE_ID = 'com.aloqa.call-bots.browser'
 const BUNDLE_PATH = join(baseDir, 'Call Bots Browser.app')
-const SOURCE_APP = '/Applications/Google Chrome.app'
+// Wherever the user's Chrome actually is: /Applications for most people,
+// ~/Applications for the ones who install without admin rights.
+const sourceApp = () => {
+  const binary = googleChromePath()
+  return binary ? binary.replace(/\/Contents\/MacOS\/Google Chrome$/u, '') : null
+}
 const READY_TIMEOUT = 60_000
 
 const quote = (value) => `"${String(value).replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`
@@ -110,14 +116,36 @@ const speak = async (body) => {
 
 // A copy of Chrome with its own bundle identifier, so AppleScript can address
 // the bots' browser without ever reaching the user's. Built once and kept.
+const bundleVersion = async (app) => {
+  try {
+    const { stdout } = await run('/usr/libexec/PlistBuddy', [
+      '-c',
+      'Print :CFBundleShortVersionString',
+      join(app, 'Contents/Info.plist'),
+    ])
+    return stdout.trim()
+  } catch {
+    return null
+  }
+}
+
 export const ensureGuestBundle = async () => {
-  if (existsSync(join(BUNDLE_PATH, 'Contents/MacOS/Google Chrome'))) return BUNDLE_PATH
-  if (!googleChromePath()) {
+  const source = sourceApp()
+  if (!source) {
     throw new Error('Google Chrome is required for Meet guests — Meet turns away anything else')
+  }
+  if (existsSync(join(BUNDLE_PATH, 'Contents/MacOS/Google Chrome'))) {
+    // Chrome updates itself; a copy left behind on an old version would one
+    // day meet Meet's "your browser isn't supported". Rebuild when they differ.
+    const [have, want] = await Promise.all([bundleVersion(BUNDLE_PATH), bundleVersion(source)])
+    if (!want || have === want) return BUNDLE_PATH
+    log.info(`Google Chrome is now ${want} — rebuilding the Call Bots browser (about a minute)`)
+  } else {
+    log.info('building the Call Bots browser for Meet guests — one time, about a minute')
   }
   const staging = `${BUNDLE_PATH}.building`
   rmSync(staging, { recursive: true, force: true })
-  await run('ditto', [SOURCE_APP, staging], { timeout: 300_000 })
+  await run('ditto', [source, staging], { timeout: 600_000 })
   const plist = join(staging, 'Contents/Info.plist')
   await run('/usr/libexec/PlistBuddy', ['-c', `Set :CFBundleIdentifier ${BUNDLE_ID}`, plist])
   await run('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleName CallBotsBrowser', plist])
@@ -201,6 +229,8 @@ const ensureStatsWindow = async () => {
   shared.statsWindowPromise ??= createWindow(async () => {
     const windowId = await newWindowId()
     await speak(onWindow(windowId, `set URL of _t to ${quote(INTERNALS)}`))
+    // Nobody needs to see it; it keeps polling while minimised.
+    await speak(onWindow(windowId, 'set minimized of _w to true')).catch(() => {})
     if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] stats window', windowId)
     return windowId
   }).catch(() => null)
@@ -211,6 +241,21 @@ const ensureStatsWindow = async () => {
 // One read of the whole page: which connection belongs to which page URL, and
 // the handful of fields the dashboard shows. Everything else on the page is
 // SDP and candidate grids the reader never touches.
+// Single line, like everything sent through AppleScript. Picks the biggest
+// video that is actually playing, which in the call is the bot's own tile.
+const GRAB_VIDEO = [
+  '(function(){',
+  'var best=null,area=0;',
+  '[].slice.call(document.querySelectorAll("video")).forEach(function(v){',
+  '  if(v.readyState<2||v.videoWidth===0||v.paused)return;',
+  '  var r=v.getBoundingClientRect();var a=r.width*r.height;if(a>area){area=a;best=v}});',
+  'if(!best)return "";',
+  'var w=320,h=Math.max(1,Math.round(w*best.videoHeight/best.videoWidth));',
+  'var c=document.createElement("canvas");c.width=w;c.height=h;',
+  'try{c.getContext("2d").drawImage(best,0,0,w,h);return c.toDataURL("image/jpeg",0.6)}catch(e){return ""}',
+  '})()',
+].join('')
+
 const INTERNALS_READ = [
   '(function(){',
   'var heads={};',
@@ -219,10 +264,10 @@ const INTERNALS_READ = [
   '  if(m)heads[m[1]+"-"+m[2]]=t.split(" [")[0]});',
   'var stats={};',
   '[].slice.call(document.querySelectorAll("[id*=-table-]")).forEach(function(e){',
-  '  var m=e.id.match(/^(\\d+-\\d+)-table-([^-]+)-(\\w+)$/);if(!m)return;',
-  '  var f=m[3];if(!/^(type|kind|bytesSent|bytesReceived|currentRoundTripTime|packetsLost|jitter|state|nominated|mediaSourceId|trackIdentifier)$/.test(f))return;',
+  '  var m=e.id.match(/^(\\d+-\\d+)-table-(.+)-(\\w+)$/);if(!m)return;',
+  '  var f=m[3];if(!/^(type|kind|bytesSent|bytesReceived|packetsReceived|currentRoundTripTime|packetsLost|jitter|state|nominated|mediaSourceId|trackIdentifier|frameWidth|frameHeight|framesPerSecond|codecId|ssrc|mid|rid|nackCount|pliCount|jitterBufferDelay|jitterBufferEmittedCount|framesDropped|freezeCount|decoderImplementation|audioLevel|qualityLimitationReason|localCandidateId|remoteCandidateId|candidateType|protocol|dtlsState|mimeType|clockRate|channels|availableOutgoingBitrate|selectedCandidatePairId)$/.test(f))return;',
   '  var k=m[1]+"|"+m[2];if(!stats[k])stats[k]={pc:m[1]};',
-  '  var v=e.textContent.trim();if(v.indexOf(f)===0)v=v.slice(f.length);',
+  '  var v=e.textContent.trim();if(v.indexOf(f)===0)v=v.slice(f.length);v=v.replace(/\\s*\\uD83D\\uDD17\\s*$/,"").trim();',
   '  stats[k][f]=v});',
   'return JSON.stringify({heads:heads,stats:stats})',
   '})()',
@@ -392,7 +437,10 @@ export class GuestWindow {
     // prints, so this window's connections can be told from the others'.
     this.tag = tag
     this.closed = false
+    // Cumulative bytes per stream from each reader's previous read; a rate is
+    // the difference over the real gap since that reader last looked.
     this.lastStats = new Map()
+    this.lastSnap = new Map()
   }
 
   static async open(media, options, { tag = 'guest' } = {}) {
@@ -429,6 +477,112 @@ export class GuestWindow {
   // The same shape the stream monitor's summary takes, so the card needs no
   // second code path. Rates are differenced against the previous read, over
   // the real gap between them.
+  // The expanded stream panel, in the shape the monitor's snapshot takes so
+  // the dashboard needs no second renderer. Everything here is what
+  // webrtc-internals already prints; this only arranges it.
+  async rtcSnapshot() {
+    if (this.closed) return null
+    const page = await readInternals()
+    if (!page) return null
+    const marker = `#cb-${this.tag}`
+    const mine = new Set(
+      Object.entries(page.heads).filter(([, url]) => url.includes(marker)).map(([pc]) => pc),
+    )
+    if (mine.size === 0) return null
+    const now = Date.now()
+    const seen = new Map()
+    // Its own window between reads: the summary polls every two seconds too,
+    // and a rate taken milliseconds after one of those is zero by construction.
+    const rate = (key, bytes) => {
+      const was = this.lastSnap.get(key)
+      seen.set(key, { bytes, at: now })
+      return was && now > was.at ? ((bytes - was.bytes) * 8) / (now - was.at) : 0
+    }
+    const r1 = (value) => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null)
+    const num = (value) => (value === undefined || value === '' ? null : Number(value))
+    const byId = (pc, id) => (id ? page.stats[`${pc}|${id}`] ?? null : null)
+    const codecOf = (stat) => {
+      const codec = byId(stat.pc, stat.codecId)
+      if (!codec?.mimeType) return null
+      return {
+        name: String(codec.mimeType).split('/').pop(),
+        clock: num(codec.clockRate),
+        channels: num(codec.channels),
+      }
+    }
+
+    const outbound = []
+    const inbound = []
+    let rtt = null
+    let jitter = null
+    let loss = null
+    let avail = null
+    let limit = null
+    let dtls = null
+    let localCand = null
+    let remoteCand = null
+
+    for (const [key, stat] of Object.entries(page.stats)) {
+      if (!mine.has(stat.pc)) continue
+      const id = key.split('|')[1]
+      if (stat.type === 'outbound-rtp') {
+        const kbps = r1(rate(key, num(stat.bytesSent) || 0))
+        const reason = stat.qualityLimitationReason
+        if (reason && reason !== 'none') limit = reason
+        outbound.push({
+          id, kind: stat.kind ?? null, dir: 'out', ssrc: num(stat.ssrc), mid: stat.mid ?? null,
+          track: stat.mediaSourceId ?? null, name: null, kbps,
+          w: num(stat.frameWidth), h: num(stat.frameHeight), fps: num(stat.framesPerSecond),
+          codec: codecOf(stat), bytes: num(stat.bytesSent), rid: stat.rid ?? null,
+          limit: reason && reason !== 'none' ? reason : null, idle: kbps === 0,
+        })
+      } else if (stat.type === 'inbound-rtp') {
+        const kbps = r1(rate(key, num(stat.bytesReceived) || 0))
+        const lost = num(stat.packetsLost) ?? 0
+        const got = num(stat.packetsReceived) ?? 0
+        if (stat.kind === 'video' && jitter === null && stat.jitter) jitter = num(stat.jitter) * 1000
+        inbound.push({
+          id, kind: stat.kind ?? null, dir: 'in', ssrc: num(stat.ssrc), mid: stat.mid ?? null,
+          track: stat.trackIdentifier ?? null, name: null, kbps,
+          w: num(stat.frameWidth), h: num(stat.frameHeight), fps: num(stat.framesPerSecond),
+          codec: codecOf(stat), bytes: num(stat.bytesReceived),
+          jitter: stat.jitter ? r1(num(stat.jitter) * 1000) : null,
+          lossPct: got + lost > 0 ? r1((lost / (got + lost)) * 100) : null,
+          jbDelay: null, framesDropped: num(stat.framesDropped), freezeCount: num(stat.freezeCount),
+          nack: num(stat.nackCount), pli: num(stat.pliCount),
+          decoder: stat.decoderImplementation ?? null, level: num(stat.audioLevel),
+        })
+      } else if (stat.type === 'candidate-pair' && stat.state === 'succeeded' && stat.nominated === 'true') {
+        rtt = stat.currentRoundTripTime ? num(stat.currentRoundTripTime) * 1000 : rtt
+        avail = num(stat.availableOutgoingBitrate)
+        const local = byId(stat.pc, stat.localCandidateId)
+        const remote = byId(stat.pc, stat.remoteCandidateId)
+        if (local) localCand = { type: local.candidateType ?? null, protocol: local.protocol ?? null }
+        if (remote) remoteCand = { type: remote.candidateType ?? null, protocol: remote.protocol ?? null }
+      } else if (stat.type === 'transport' && stat.dtlsState) {
+        dtls = stat.dtlsState
+      }
+    }
+    this.lastSnap = seen
+    const lossValues = inbound.map((s) => s.lossPct).filter((v) => v !== null)
+    if (lossValues.length > 0) loss = r1(Math.max(...lossValues))
+    const up = r1(outbound.reduce((sum, s) => sum + (s.kbps ?? 0), 0))
+    const down = r1(inbound.reduce((sum, s) => sum + (s.kbps ?? 0), 0))
+    const via = localCand?.type === 'relay' || remoteCand?.type === 'relay'
+    return {
+      t: now, pcs: mine.size, via, viaTransport: via,
+      caps: { audio: [], video: [] },
+      negotiated: {
+        audio: [...new Set(outbound.filter((s) => s.kind === 'audio').map((s) => s.codec?.name).filter(Boolean))],
+        video: [...new Set(outbound.filter((s) => s.kind === 'video').map((s) => s.codec?.name).filter(Boolean))],
+        screen: [],
+      },
+      down, up, rtt: r1(rtt), loss, jitter: r1(jitter),
+      avail: avail === null ? null : r1(avail / 1000), limit, dtls, localCand, remoteCand,
+      outbound, inbound, dataChannels: [],
+    }
+  }
+
   async rtcSummary() {
     if (this.closed) return null
     const page = await readInternals()
@@ -538,12 +692,22 @@ export class GuestWindow {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
-  // The dashboard's card thumbnail. There is no page object to screenshot here,
-  // but the window is a real one on a real screen — so ask AppleScript where it
-  // is and photograph that rectangle. Whatever sits on top of it lands in the
-  // picture; the alternative is no picture at all.
+  // The dashboard's card thumbnail. First choice: draw the largest playing
+  // <video> on the page — in a call that is the bot's own camera as Meet
+  // renders it — to a canvas and hand back a JPEG. No permission, no window
+  // geometry, and it shows exactly what the bot publishes. Fallback: photograph
+  // the window's rectangle on screen, which needs Screen Recording and shows
+  // whatever sits on top of it.
   async screenshot() {
     if (this.closed) return null
+    const grabbed = await this.evaluate(GRAB_VIDEO).catch(() => null)
+    if (typeof grabbed === 'string' && grabbed.startsWith('data:image/jpeg;base64,')) {
+      return Buffer.from(grabbed.slice('data:image/jpeg;base64,'.length), 'base64')
+    }
+    return this.#photograph()
+  }
+
+  async #photograph() {
     const raw = await speak(this.#on('return bounds of _w')).catch(() => '')
     const [left, top, right, bottom] = raw.split(',').map((value) => Number(value.trim()))
     if (![left, top, right, bottom].every(Number.isFinite)) return null

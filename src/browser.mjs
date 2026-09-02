@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -39,7 +40,10 @@ const CHROME_PATHS = {
 }
 
 const GOOGLE_CHROME_PATHS = {
-  darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
+  darwin: [
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    join(homedir(), 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+  ],
   win32: CHROME_PATHS.win32,
   linux: ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/opt/google/chrome/chrome'],
 }
@@ -155,6 +159,9 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
   let context = null
   try {
     if (!meetProfile && onMeet(options)) {
+      if (process.platform !== 'darwin') {
+        throw new Error('Meet guests need macOS — on this machine, send Meet bots as Google accounts')
+      }
       // Not a Playwright browser at all: Meet refuses anything with a debugger
       // attached, so a guest is a real incognito window scripted through
       // Chrome's AppleScript interface. Imported here rather than at the top

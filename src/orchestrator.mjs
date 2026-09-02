@@ -31,9 +31,14 @@ const bounded = (promise, fallback) =>
 // Meet itself always uses the account's real Google name. Cards need a local
 // suffix only when two accounts share that name, so operators can tell them
 // apart without changing either identity in the call.
-// 'account' only when explicitly asked for: a Meet run needs no setup at all
-// unless somebody wants the bots to carry real Google identities.
-export const meetMode = (value) => (value === 'account' ? 'account' : 'guest')
+// 'account' when asked for — and anywhere guests cannot exist: a guest is a
+// real Chrome window driven through Apple Events, which is a macOS thing.
+// Otherwise a Meet run needs no setup at all.
+export const meetMode = (value) => {
+  if (value === 'account') return 'account'
+  if (value === 'guest') return 'guest'
+  return process.platform === 'darwin' ? 'guest' : 'account'
+}
 
 export const meetAccountLabels = (profiles, occupied = []) => {
   const labels = new Set(occupied)

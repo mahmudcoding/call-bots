@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { bundledChromiumPath, systemChromePath } from './browser.mjs'
+import { bundledChromiumPath, googleChromePath, systemChromePath } from './browser.mjs'
 import { bundledMediaDir } from './config.mjs'
 import { machineProfile } from './machine.mjs'
 import { detectTtsEngine } from './tts.mjs'
@@ -39,6 +39,19 @@ export const collectChecks = async () => {
         ? warn('speech', 'no voices bundled and no system text-to-speech — bots will publish tones')
         : ok('speech', `system text-to-speech via ${tts}`),
     )
+  }
+
+  // Google Meet: accounts reopen saved profiles in the real Chrome, and guests
+  // run in a copy of it — so on a Mac, Chrome is what decides.
+  const googleChrome = googleChromePath()
+  if (process.platform === 'darwin') {
+    checks.push(
+      googleChrome
+        ? ok('meet', `Google Chrome found — guests and accounts both available`)
+        : warn('meet', 'Google Chrome not found — Meet bots (guests and accounts) need it'),
+    )
+  } else {
+    checks.push(warn('meet', 'Meet guests need macOS — on this machine, Meet bots must be Google accounts'))
   }
 
   const machine = machineProfile()

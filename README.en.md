@@ -48,15 +48,27 @@ Meet is a rare guest here, so it stays out of sight: paste a
 `https://meet.google.com/abc-defg-hij` link and one line appears under the link
 field. With an Aloqa link, or none, the dashboard says nothing about Meet at all.
 
-That line offers the two ways in. **Guests** is the default and needs nothing at
-all: each bot opens the meeting, types its name and waits for you to admit it,
-exactly as an Aloqa guest does. Terminal: that is what `join` already does.
+That line offers the two ways in. **Guests** is the default and needs no Google
+account: each bot opens a real Chrome window, types its name and joins — or
+waits for you to admit it, exactly as an Aloqa guest does. Terminal: that is
+what `join` already does. Guests get the same card as every other bot: a live
+thumbnail of what they publish, the stream monitor with per-stream codec,
+resolution and bitrate, and the dark-camera watchdog.
 
-The catch is Google's, not ours: **Meet refuses anonymous visitors for any
-meeting created by a personal Google account** — no name field, just "You can't
-join this video call", and that holds even while the host is sitting in the
-call. Only a Workspace meeting can take guests, and only if its admin allows it.
-For everything else, use accounts.
+What a guest needs, all on the Mac running Call Bots:
+
+- **Google Chrome installed.** Guests run in a private copy of it, built on the
+  first send (about a minute, one time), because Meet turns away anonymous
+  visitors from any browser it can tell is automated — the windows are driven
+  the way a person drives them.
+- **One macOS Automation prompt**, the first time: *Call Bots wants access to
+  control the Call Bots browser.* Click Allow. It appears before any bot window
+  opens.
+- **macOS.** On Linux, Meet bots are Google accounts only.
+
+All guests in one run share a camera clip and a voice — they live in one Chrome
+process, and the fake-capture flags are process-wide. Account bots and Aloqa
+bots still get one each.
 
 ## Google Meet accounts
 

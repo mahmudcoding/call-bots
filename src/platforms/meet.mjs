@@ -383,7 +383,13 @@ const deviceState = async (page, which) => {
 
 const setDevice = async ({ page, log }, kind, which, on) => {
   const selector = which === 'mic' ? SEL.mic : SEL.cam
-  const current = await deviceState(page, which)
+  let current = await deviceState(page, which)
+  // Meet draws the toolbar a beat after the leave control that marks the call
+  // as joined; a toggle asked for in that beat is not missing, just late.
+  for (let waited = 0; current === 'unknown' && waited < 5_000; waited += 250) {
+    await page.waitForTimeout(250)
+    current = await deviceState(page, which)
+  }
   if (current === 'request') {
     log.warn(`${kind} is host-restricted — cannot toggle`)
     return 'request'
@@ -675,101 +681,55 @@ const join = async (ctx) => {
 
 // ---------------------------------------------------------------------------
 // Participants.
+//
+// A string evaluate like everything else here, so a guest window can answer it
+// too: this is what the dashboard's verify and recoverIfAdmitted run on.
 
-const remote = (page) =>
-  page.evaluate((sel) => {
-    const vis = (el) =>
-      Boolean(el) && Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-    // Visible tiles only. Meet virtualises the grid and keeps the post-call
-    // screen's leftovers in the document, and counting either of those reports
-    // participants nobody can see — the opposite of what this check is for.
-    const tiles = [...document.querySelectorAll(sel.tile)].filter(
-      (tile) => vis(tile) && !tile.parentElement?.closest(sel.tile),
-    )
-    const summary = { local: 0, remote: 0, remotePlaying: 0, frozen: 0, names: [] }
-
-    // Meet exposes no frozen flag of its own, so freshness is measured here:
-    // a playing video whose currentTime has not moved since the last check is
-    // frozen, however healthy its readyState looks.
-    const now = Date.now()
-    const seen = (window.__botMeetFrames__ ??= new Map())
-
-    // Which tiles belong to somebody else? Meet marks its own tile with
-    // nothing — today's self view carries no data-self-name, no aria-label and
-    // no "you" anywhere, only the Reframe and Backgrounds controls. Matching
-    // the SENT tracks does not work either: Meet's effects pipeline publishes a
-    // processed track while the self view renders the raw one.
-    //
-    // What is never ambiguous is the receiving side. A track this browser is
-    // RECEIVING came from another participant by definition, so the tile
-    // playing one is theirs and every other tile is this bot's own. No
-    // attribute, no English, nothing for a Meet redesign to take away.
-    const connections = window.__botPeerConnections__
-    const receiving = new Set()
-    try {
-      for (const pc of connections ?? []) {
-        for (const receiver of pc.getReceivers?.() ?? []) {
-          if (receiver.track?.id) receiving.add(receiver.track.id)
-        }
-      }
-    } catch {
-      // Fall through to the attribute checks below.
+const REMOTE_SOURCE = oneLine(`(function(){${HELPERS}
+  var tiles = [].slice.call(document.querySelectorAll(${js(SEL.tile)})).filter(function (t) {
+    return __vis(t) && !(t.parentElement && t.parentElement.closest(${js(SEL.tile)}))
+  });
+  var summary = { local: 0, remote: 0, remotePlaying: 0, frozen: 0, names: [] };
+  var now = Date.now();
+  var seen = window.__botMeetFrames__ = window.__botMeetFrames__ || new Map();
+  var connections = window.__botPeerConnections__ || null;
+  var receiving = {};
+  try {
+    if (connections) connections.forEach(function (pc) {
+      (pc.getReceivers ? pc.getReceivers() : []).forEach(function (r) { if (r.track && r.track.id) receiving[r.track.id] = 1 })
+    })
+  } catch (e) {}
+  var playsRemote = function (video) {
+    try { return (video && video.srcObject ? video.srcObject.getTracks() : []).some(function (t) { return receiving[t.id] }) }
+    catch (e) { return false }
+  };
+  tiles.forEach(function (tile) {
+    var aria = tile.getAttribute('aria-label') || '';
+    var video = tile.querySelector('video');
+    var own = !!tile.querySelector('[aria-label*="Reframe" i], [aria-label*="Backgrounds" i], [aria-label*="effects" i]');
+    var local = connections ? !playsRemote(video)
+      : (tile.hasAttribute('data-self-name') || /\\b(?:you|your)\\b/i.test(aria) || own);
+    var rawName = tile.getAttribute('data-self-name') || tile.getAttribute('data-sort-key') ||
+      (tile.querySelector('[data-self-name]') && tile.querySelector('[data-self-name]').getAttribute('data-self-name')) || aria || null;
+    var name = rawName ? String(rawName).split('_')[0].trim() : '';
+    if (name) summary.names.push((local ? '*' : '') + name);
+    if (local) { summary.local += 1; return }
+    summary.remote += 1;
+    if (video && video.readyState >= 2 && video.videoWidth > 0 && !video.paused) {
+      summary.remotePlaying += 1;
+      var id = tile.getAttribute('data-participant-id') || name || String(summary.remote);
+      var last = seen.get(id);
+      if (last && now - last.at > 1000) {
+        if (last.time === video.currentTime) summary.frozen += 1;
+        seen.set(id, { time: video.currentTime, at: now })
+      } else if (!last) seen.set(id, { time: video.currentTime, at: now })
     }
-    const playsRemoteTrack = (video) => {
-      try {
-        return (video?.srcObject?.getTracks?.() ?? []).some((track) => receiving.has(track.id))
-      } catch {
-        return false
-      }
-    }
+  });
+  if (summary.local === 0 && __all(${js(SEL.leaveButton)}).length > 0) summary.local = 1;
+  return JSON.stringify(summary)
+})()`)
 
-    for (const tile of tiles) {
-      const aria = tile.getAttribute('aria-label') ?? ''
-      const video = tile.querySelector('video')
-      // With the shim present the receivers decide and nothing else gets a
-      // vote. Without it — a page the shim never reached, or the mock pages the
-      // adapter tests drive — fall back to whatever the markup says.
-      const local = connections
-        ? !playsRemoteTrack(video)
-        : tile.hasAttribute('data-self-name') || /\b(?:you|your)\b/iu.test(aria)
-      // Only real name attributes. Reaching into the tile for any nested
-      // aria-label picks up Meet's own hover controls and reports a
-      // participant called "Reframe".
-      const rawName =
-        tile.getAttribute('data-self-name') ??
-        tile.getAttribute('data-sort-key') ??
-        tile.querySelector('[data-self-name]')?.getAttribute('data-self-name') ??
-        (aria || null)
-      const name = rawName?.split('_')[0]?.trim()
-      if (name) summary.names.push(`${local ? '*' : ''}${name}`)
-      if (local) {
-        summary.local += 1
-        continue
-      }
-      summary.remote += 1
-      if (video && video.readyState >= 2 && video.videoWidth > 0 && !video.paused) {
-        summary.remotePlaying += 1
-        const id = tile.getAttribute('data-participant-id') ?? name ?? String(summary.remote)
-        const last = seen.get(id)
-        if (last && now - last.at > 1000) {
-          if (last.time === video.currentTime) summary.frozen += 1
-          seen.set(id, { time: video.currentTime, at: now })
-        } else if (!last) {
-          seen.set(id, { time: video.currentTime, at: now })
-        }
-      }
-    }
-
-    // Meet can virtualise the self-view out of the grid. Its leave control is
-    // still authoritative evidence that this browser is in the call — but only
-    // while it is actually on screen: the post-call "you left" page keeps a
-    // hidden one around, and trusting that resurrects a bot that is not in.
-    if (summary.local === 0) {
-      const leave = [...document.querySelectorAll(sel.leaveButton)].some(vis)
-      if (leave) summary.local = 1
-    }
-    return summary
-  }, SEL)
+const remote = (page) => evaluate(page, REMOTE_SOURCE)
 
 export default {
   id: 'meet',

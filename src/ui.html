@@ -629,7 +629,14 @@ const renderAccounts = () => {
 // link. Guests need nothing set up, so that is the default and the line stays
 // quiet; accounts bring the readiness count and Manage with them.
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)]
-const meetMode = () => S.state?.session?.meetMode ?? S.meetMode
+const guestsSupported = () => /^darwin/u.test(String(S.state?.machine?.platform ?? 'darwin'))
+const meetMode = () => {
+  const running = S.state?.session?.meetMode
+  if (running) return running
+  // Guests are a macOS thing (a real Chrome window driven through Apple
+  // Events); elsewhere the only way into Meet is a Google account.
+  return guestsSupported() ? S.meetMode : 'account'
+}
 
 // One description of what the Meet empty state says. There used to be two,
 // written in two places and both run on every frame, and they drifted apart the
@@ -643,8 +650,15 @@ const meetEmptyState = (joining) => {
     return {
       title: 'Preparing Google Meet bots',
       text: guests
-        ? 'Each bot opens the meeting and asks to be let in — admit them in Meet.'
+        ? 'Each bot opens a Chrome window and asks to be let in — admit them in Meet. ' +
+          'The first send on this Mac also builds a private copy of Chrome (about a minute).'
         : 'Opening each reserved Google account in its own headless Chrome profile.',
+    }
+  }
+  if (guests && !summary.chromeReady) {
+    return {
+      title: 'Google Chrome is required for Meet',
+      text: 'Meet guests run in a copy of Google Chrome — install it, then send again.',
     }
   }
   if (guests) {
@@ -689,17 +703,22 @@ const renderMeetBar = () => {
   for (const button of $$('[data-meet-mode]')) {
     button.setAttribute('aria-pressed', String(button.dataset.meetMode === mode))
     // A running session's bots are already one kind or the other.
-    button.disabled = running
+    button.disabled = running || (button.dataset.meetMode === 'guest' && !guestsSupported())
+    if (button.dataset.meetMode === 'guest') {
+      button.title = guestsSupported() ? '' : 'Meet guests need macOS'
+    }
   }
   const summary = meetProfiles()
   const wanted = Math.max(1, Number($('#count').value) || 1)
   const short = mode === 'account' && summary.chromeReady && summary.available < wanted
   bar.hidden = false
-  bar.classList.toggle('-short', mode === 'account' && (short || !summary.chromeReady))
+  bar.classList.toggle('-short', short || !summary.chromeReady)
   $('#accountsBtn').hidden = mode !== 'account'
   $('#meetBarText').innerHTML =
     mode === 'guest'
-      ? 'no setup — the host admits them'
+      ? !summary.chromeReady
+        ? 'needs <b>Google Chrome</b> installed'
+        : 'no setup — the host admits them'
       : !summary.chromeReady
         ? 'needs <b>Google Chrome</b> installed'
         : short
@@ -797,8 +816,10 @@ const syncPlatformUi = () => {
   const busy = status === 'joining' || status === 'stopping'
   // Guests run on the bundled Chromium like Aloqa bots; only accounts need the
   // real Chrome their saved profiles belong to.
+  // Both ways into Meet run on the real Google Chrome — accounts reopen their
+  // saved profiles in it, and the guests' browser is a copy of it.
   const browserUnavailable = S.state && (
-    id === 'meet' && meetMode() === 'account'
+    id === 'meet'
       ? !summary.chromeReady
       : (!S.state.browserReady || S.state.browserInstalling)
   )

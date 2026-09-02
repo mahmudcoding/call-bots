@@ -429,10 +429,14 @@ export class Guest {
     const cam = await this.camState().catch(() => 'unknown')
     const sharing = (await this.screenState().catch(() => 'unknown')) === 'on'
     try {
-      await this.context.addInitScript((codecs) => {
-        if (!window.__botSetCodec__) return
-        for (const [role, codec] of Object.entries(codecs)) window.__botSetCodec__(role, codec)
-      }, { ...this.codecs })
+      // A guest window has no context to seed; its rejoin is a plain leave and
+      // join, which is all the watchdog wants from it.
+      if (this.context) {
+        await this.context.addInitScript((codecs) => {
+          if (!window.__botSetCodec__) return
+          for (const [role, codec] of Object.entries(codecs)) window.__botSetCodec__(role, codec)
+        }, { ...this.codecs })
+      }
       await this.leave()
       await this.join(this.target)
     } catch (error) {
@@ -543,7 +547,10 @@ export class Guest {
   // bot heals whether or not anyone is watching it — a headless `join` run has
   // no dashboard at all, and its bots have to come back just the same.
   async pollHealth() {
-    if (this.platform?.capabilities?.rtc === false || !this.instrumented) return
+    // Guests are watched too: their stats come from webrtc-internals rather
+    // than the monitor, but the ladder only needs a camera state, an outbound
+    // video rate and a way to toggle and rejoin — all of which a guest has.
+    if (this.platform?.capabilities?.rtc === false) return
     if (this.state !== 'in-call' || !this.page || this.page.isClosed()) return
     if (this.healing || this.polling) return
     this.polling = true
@@ -759,14 +766,10 @@ export class Guest {
 
   // Full sanitized stream model for the expanded card panel.
   async rtcSnapshot() {
-    if (
-      this.platform?.capabilities?.rtc === false ||
-      !this.instrumented ||
-      this.state !== 'in-call' ||
-      !this.page
-    ) {
+    if (this.platform?.capabilities?.rtc === false || this.state !== 'in-call' || !this.page) {
       return null
     }
+    if (!this.instrumented) return this.page.rtcSnapshot?.().catch(() => null) ?? null
     return rtcSnapshot(this.page).catch(() => null)
   }
 

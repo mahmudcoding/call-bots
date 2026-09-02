@@ -190,9 +190,11 @@ Clicking is plain `element.click()`.
   permission. Check grants with: `sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db
   "select client, indirect_object_identifier, auth_value from access where
   service='kTCCServiceAppleEvents'"`.
-- **No Playwright page**, so no `addInitScript`. The card thumbnail is a
-  `screencapture` of the window's on-screen rectangle (AppleScript gives its
-  bounds). Nothing injected into a Meet page can see its peer connections —
+- **No Playwright page**, so no `addInitScript`. The card thumbnail is drawn
+  in-page: the largest playing `<video>` (the bot's own tile) onto a canvas,
+  returned as a JPEG data URL — no Screen Recording permission, and it shows
+  exactly what the bot publishes. A `screencapture` of the window's rectangle
+  is only the fallback. Nothing injected into a Meet page can see its peer connections —
   Meet takes `RTCPeerConnection` into a module closure while its bundle parses,
   and an injection during the load still loses the race — and `--load-extension`
   is dead in branded Chrome 152 (`chrome://extensions` stays empty, silently).
