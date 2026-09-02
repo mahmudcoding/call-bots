@@ -47,17 +47,55 @@ const tell = (body) => `tell application id ${quote(BUNDLE_ID)}\n${body}\nend te
 // so launching it without a --user-data-dir makes it join the user's own Chrome
 // and open windows there. One stray `count of windows` did exactly that, twice.
 // System Events answers without launching anything.
+// macOS refuses the Apple Event outright when Automation permission has not
+// been granted — which must not be read as "the browser is not running". It is
+// a different problem with a different fix, and it has to be said out loud.
+const NOT_PERMITTED = /not authorized to send apple events|-1743|not permitted/iu
+const PERMISSION_HELP =
+  'Call Bots needs permission to control System Events and the Call Bots browser — ' +
+  'System Settings → Privacy & Security → Automation → Call Bots'
+
 const browserRunning = async () => {
-  const out = await osascript(
-    `tell application "System Events" to return (exists (first application process whose bundle identifier is ${quote(BUNDLE_ID)}))`,
-    10_000,
-  ).catch(() => 'false')
+  let out
+  try {
+    out = await osascript(
+      `tell application "System Events" to return (exists (first application process whose bundle identifier is ${quote(BUNDLE_ID)}))`,
+      10_000,
+    )
+  } catch (error) {
+    if (NOT_PERMITTED.test(String(error.message))) throw new Error(PERMISSION_HELP)
+    return false
+  }
   return out.trim() === 'true'
 }
 
+// Asked once, deliberately, before any window exists: macOS shows its
+// Automation prompt on the first Apple Event, and a prompt that appears while
+// bots are already launching gets answered late or not at all — measured as a
+// guest that never navigated and two stray windows in the user's own Chrome.
+const preflightPermissions = async () => {
+  await browserRunning()
+}
+
+const processCount = async () =>
+  osascript(
+    `tell application "System Events" to return count of (application processes whose bundle identifier is ${quote(BUNDLE_ID)})`,
+    10_000,
+  ).catch(() => '?')
+
 const speak = async (body) => {
   if (!(await browserRunning())) throw new Error('the Call Bots browser is not running')
-  return osascript(tell(body))
+  let out
+  try {
+    out = await osascript(tell(body))
+  } catch (error) {
+    if (NOT_PERMITTED.test(String(error.message))) throw new Error(PERMISSION_HELP)
+    throw error
+  }
+  if (process.env.CALL_BOTS_DEBUG_MEET) {
+    console.error('[speak]', body.split('\n').pop().slice(0, 44), '| procs after:', await processCount())
+  }
+  return out
 }
 
 // A copy of Chrome with its own bundle identifier, so AppleScript can address
@@ -79,7 +117,18 @@ export const ensureGuestBundle = async () => {
   await run('codesign', ['--force', '--sign', '-', staging], { timeout: 300_000 })
   rmSync(BUNDLE_PATH, { recursive: true, force: true })
   await run('mv', [staging, BUNDLE_PATH])
+  await registerBundle()
   return BUNDLE_PATH
+}
+
+// One LaunchServices registration for the bundle id, at the path that exists.
+// `tell application id` resolves through LaunchServices, and a stale record —
+// a staging copy, an old build — is a launch of the wrong thing.
+const LSREGISTER =
+  '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+const registerBundle = async () => {
+  await run(LSREGISTER, ['-u', `${BUNDLE_PATH}.building`], { timeout: 60_000 }).catch(() => {})
+  await run(LSREGISTER, ['-f', BUNDLE_PATH], { timeout: 60_000 }).catch(() => {})
 }
 
 // Window ids run past 2^30, and AppleScript turns a literal that big into a
@@ -183,6 +232,7 @@ const readInternals = async () => {
 }
 
 const startShared = async (media, options) => {
+  await preflightPermissions()
   const bundle = await ensureGuestBundle()
   const userDataDir = mkdtempSync(join(tmpdir(), 'call-bots-meet-guests-'))
   // Scripting is a per-profile preference with no command-line flag, and it has
@@ -237,6 +287,7 @@ const startShared = async (media, options) => {
 
   // Wait for the process to exist before addressing it, or the first Apple
   // Event launches a second copy into the user's Chrome.
+  if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] spawned pid', child.pid)
   const deadline = Date.now() + READY_TIMEOUT
   while (Date.now() < deadline) {
     if (await browserRunning()) {

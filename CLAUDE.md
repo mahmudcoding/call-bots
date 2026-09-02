@@ -175,8 +175,18 @@ Clicking is plain `element.click()`.
   apiece. One incognito window per guest; Meet counts each as its own
   participant (three hand-opened windows joined one meeting as three guests).
 - **Visible windows**, N of them.
-- **An Automation prompt** the first time — the app asking to control the bot
-  browser. Inherent: driving Chrome without a debugger *is* Apple Events.
+- **Two Automation prompts** the first time — the app asking to control
+  *System Events* (used to check the bot browser is running without launching
+  it) and the *Call Bots browser* itself. Inherent: driving Chrome without a
+  debugger *is* Apple Events. The grants are per calling app: the terminal has
+  them, the packaged `Call Bots.app` gets its own, and a prompt that appears
+  while bots are already launching is answered late — measured as a guest that
+  never navigated plus two stray windows in the user's own Chrome. So the first
+  Apple Event is sent deliberately before any window exists, and a refusal is
+  reported as a permission problem, not as "browser not running". Check with:
+  `sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db "select client,
+  indirect_object_identifier, auth_value from access where
+  service='kTCCServiceAppleEvents'"`.
 - **No Playwright page**, so no `addInitScript`. The card thumbnail is a
   `screencapture` of the window's on-screen rectangle (AppleScript gives its
   bounds). Nothing injected into a Meet page can see its peer connections —
