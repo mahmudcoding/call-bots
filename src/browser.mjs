@@ -1,6 +1,4 @@
-import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -130,106 +128,12 @@ const meetLaunchIgnores = () =>
     ? ['--enable-automation', '--use-mock-keychain', '--password-store=basic']
     : ['--enable-automation']
 
+const onMeet = (options) => String(options?.baseUrl ?? '').includes('meet.google.com')
+
 // One browser PROCESS per guest: the fake-capture-file flags are process-wide,
 // so distinct media needs distinct processes. Aloqa contexts are always fresh
 // and anonymous; Meet deliberately reopens the one isolated signed-in profile
-// reserved for that bot.
-const onMeet = (options) => String(options?.baseUrl ?? '').includes('meet.google.com')
-
-// A Meet guest has to arrive in a real, visible, ordinarily-launched Chrome.
-//
-// Google refuses anonymous Meet joins from a headless browser — the page comes
-// back "You can't join this video call" with no name field at all, on the very
-// meeting a hand-opened incognito window joins fine. Measured against one live
-// meeting, every other variable held: bundled Chromium and real Chrome, with
-// and without automation switches, navigator.webdriver true and false, a fresh
-// profile and a copy of a signed-in one, host present and absent. The only
-// thing that ever changed the answer was headless.
-//
-// So this path does not use Playwright's launcher at all. It starts Chrome the
-// way a person does — incognito, on screen — and attaches over CDP afterwards.
-// Signed-in bots are unaffected: Google tolerates automation that has an
-// identity, which is why the account path can stay headless.
-const DEVTOOLS_PORT_TIMEOUT = 30_000
-
-const devtoolsPort = async (userDataDir) => {
-  const file = join(userDataDir, 'DevToolsActivePort')
-  const deadline = Date.now() + DEVTOOLS_PORT_TIMEOUT
-  while (Date.now() < deadline) {
-    try {
-      const port = Number(readFileSync(file, 'utf8').split('\n')[0])
-      if (Number.isInteger(port) && port > 0) return port
-    } catch {
-      // Chrome has not written it yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-  throw new Error('Google Chrome did not come up for the Meet guest window')
-}
-
-const launchMeetGuest = async (options) => {
-  const executablePath = googleChromePath()
-  if (!executablePath) {
-    throw new Error(
-      'Google Chrome is required for Meet guests — Meet turns away anything else',
-    )
-  }
-  const userDataDir = mkdtempSync(join(tmpdir(), 'call-bots-meet-guest-'))
-  const child = spawn(
-    executablePath,
-    [
-      // Kept deliberately short. Every extra switch is something Meet can
-      // fingerprint, and this exact set is the one measured to get in.
-      `--user-data-dir=${userDataDir}`,
-      '--incognito',
-      // 0 lets Chrome pick; it writes the choice into the profile directory,
-      // which is the only race-free way to learn it.
-      '--remote-debugging-port=0',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--lang=en-US',
-      '--mute-audio',
-      '--autoplay-policy=no-user-gesture-required',
-      '--use-fake-device-for-media-stream',
-      ...(options.media && !options.noVideo
-        ? [`--use-file-for-fake-video-capture=${options.media.video}`]
-        : []),
-      ...(options.media && !options.noAudio
-        ? [`--use-file-for-fake-audio-capture=${options.media.audio}`]
-        : []),
-      'about:blank',
-    ],
-    { stdio: 'ignore', detached: true },
-  )
-
-  const stop = () => {
-    try {
-      process.kill(-child.pid)
-    } catch {
-      try {
-        child.kill()
-      } catch {
-        // Already gone.
-      }
-    }
-    try {
-      rmSync(userDataDir, { recursive: true, force: true })
-    } catch {
-      // A directory Chrome is still unlinking is not worth failing a teardown.
-    }
-  }
-
-  try {
-    const port = await devtoolsPort(userDataDir)
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
-    const context = browser.contexts()[0] ?? (await browser.newContext())
-    return { browser, context, stop }
-  } catch (error) {
-    stop()
-    throw error
-  }
-}
-
+// reserved for that bot. A Meet GUEST is neither — see src/guest-browser.mjs.
 export const launchGuest = async (guest, media, options, codecs = null, meetProfile = null) => {
   const args = buildArgs(guest, media, options)
   const headless = !options.headed
@@ -249,14 +153,17 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
 
   let browser = null
   let context = null
-  let stopGuestWindow = null
   try {
     if (!meetProfile && onMeet(options)) {
-      const launched = await launchMeetGuest({ ...options, media })
-      browser = launched.browser
-      context = launched.context
-      stopGuestWindow = launched.stop
-    } else if (meetProfile) {
+      // Not a Playwright browser at all: Meet refuses anything with a debugger
+      // attached, so a guest is a real incognito window scripted through
+      // Chrome's AppleScript interface. Imported here rather than at the top
+      // because that module needs this one's Chrome paths.
+      const { GuestWindow } = await import('./guest-browser.mjs')
+      const window = await GuestWindow.open(media, options)
+      return { browser: null, context: null, page: window, close: () => window.close() }
+    }
+    if (meetProfile) {
       const executablePath = googleChromePath()
       if (!executablePath) {
         throw new Error('Google Chrome is required for saved Google Meet accounts')
@@ -284,23 +191,6 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
       context = await browser.newContext(contextOptions)
     }
 
-    // The guest window is left exactly as Chrome opened it — no granted
-    // permissions, no document-start hooks. Meet turns away a browser it can
-    // tell is being instrumented, and it answers the camera question itself
-    // through the dialog Meet puts up.
-    if (stopGuestWindow) {
-      context.setDefaultTimeout(Math.min(120_000, 20_000 + (options.batchSize ?? 1) * 2_000))
-      const guestPage = context.pages()[0] ?? (await context.newPage())
-      return {
-        browser,
-        context,
-        page: guestPage,
-        close: async () => {
-          await browser.close().catch(() => {})
-          stopGuestWindow()
-        },
-      }
-    }
     await context.grantPermissions(['camera', 'microphone'], { origin: options.baseUrl })
     // Codec preferences and the synthetic screen need document-start hooks:
     // both have to exist before the call platform's bundle builds its first
@@ -329,31 +219,14 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
     // starting, none of them loads a page in twenty seconds, and every bot dies
     // of a timeout that says nothing about the real problem.
     context.setDefaultTimeout(Math.min(120_000, 20_000 + (options.batchSize ?? 1) * 2_000))
-    const page =
-      meetProfile || stopGuestWindow
-        ? context.pages()[0] ?? (await context.newPage())
-        : await context.newPage()
+    const page = meetProfile ? context.pages()[0] ?? (await context.newPage()) : await context.newPage()
     return {
       browser,
       context,
       page,
-      close: async () => {
-        if (stopGuestWindow) {
-          // Closing the CDP connection leaves the window standing; the process
-          // this app started is the thing that has to go.
-          await browser.close().catch(() => {})
-          stopGuestWindow()
-          return
-        }
-        await (meetProfile ? context.close() : browser.close())
-      },
+      close: () => (meetProfile ? context.close() : browser.close()),
     }
   } catch (error) {
-    if (stopGuestWindow) {
-      if (browser) await browser.close().catch(() => {})
-      stopGuestWindow()
-      throw error
-    }
     if (context) await context.close().catch(() => {})
     if (browser) await browser.close().catch(() => {})
     if (meetProfile) {

@@ -121,6 +121,15 @@ export class Guest {
     return this.user.label
   }
 
+  // A Meet guest is a real Chrome window scripted through AppleScript, not a
+  // Playwright page: Meet refuses any browser with a debugger attached. It can
+  // evaluate and click, and that is all — no init scripts, no screenshots, and
+  // no injecting the stream monitor, which needs a function rather than a line
+  // of source. Everything that needs more than an evaluate checks this first.
+  get instrumented() {
+    return Boolean(this.context)
+  }
+
   async start(target) {
     const platform = platformById(target?.platform)
     if (!platform) throw new Error(`no adapter for platform "${target?.platform}"`)
@@ -141,6 +150,7 @@ export class Guest {
   }
 
   async #shot(name) {
+    if (!this.instrumented) return null
     return failureShot(this.page, this.options.runDir, this.user.slug, name)
   }
 
@@ -150,13 +160,10 @@ export class Guest {
     this.lastError = message
     // A failure can race a teardown that has already dropped the page, and an
     // error handler that throws its own TypeError loses the real message.
-    const where = (() => {
-      try {
-        return this.page?.url() ?? 'page closed'
-      } catch {
-        return 'page closed'
-      }
-    })()
+    // A guest window reports its URL asynchronously; a Playwright page does not.
+    const where = await Promise.resolve(this.page?.url?.() ?? 'page closed').catch(
+      () => 'page closed',
+    )
     throw new Error(`[${this.label}] ${message} (url: ${where}${shot ? `, screenshot: ${shot}` : ''})`)
   }
 
@@ -204,7 +211,7 @@ export class Guest {
     }
     // After the devices settle, so the injection never competes with the
     // arming clicks. Losing the monitor is not losing the bot.
-    if (platform.capabilities?.rtc !== false) {
+    if (platform.capabilities?.rtc !== false && this.instrumented) {
       await this.#ensureMonitor().catch(() => {})
       // The join navigated, and navigation re-seeds the page with the LAUNCH
       // codec preferences — anything switched while this bot was still on its
@@ -536,7 +543,7 @@ export class Guest {
   // bot heals whether or not anyone is watching it — a headless `join` run has
   // no dashboard at all, and its bots have to come back just the same.
   async pollHealth() {
-    if (this.platform?.capabilities?.rtc === false) return
+    if (this.platform?.capabilities?.rtc === false || !this.instrumented) return
     if (this.state !== 'in-call' || !this.page || this.page.isClosed()) return
     if (this.healing || this.polling) return
     this.polling = true
@@ -738,7 +745,12 @@ export class Guest {
   // (navigated, or admitted after a timeout), a reinstall is kicked off so the
   // next tick heals on its own.
   async rtcSummary() {
-    if (this.platform?.capabilities?.rtc === false || this.state !== 'in-call' || !this.page) {
+    if (
+      this.platform?.capabilities?.rtc === false ||
+      !this.instrumented ||
+      this.state !== 'in-call' ||
+      !this.page
+    ) {
       return null
     }
     const summary = await rtcSummary(this.page).catch(() => null)
@@ -748,7 +760,12 @@ export class Guest {
 
   // Full sanitized stream model for the expanded card panel.
   async rtcSnapshot() {
-    if (this.platform?.capabilities?.rtc === false || this.state !== 'in-call' || !this.page) {
+    if (
+      this.platform?.capabilities?.rtc === false ||
+      !this.instrumented ||
+      this.state !== 'in-call' ||
+      !this.page
+    ) {
       return null
     }
     return rtcSnapshot(this.page).catch(() => null)
@@ -815,7 +832,9 @@ export class Guest {
   }
 
   async teardown() {
-    if (!this.browser && !this.context) {
+    // A guest has neither a browser nor a context — its window is the only
+    // thing to close, and closeBrowser is what knows how.
+    if (!this.browser && !this.context && !this.closeBrowser) {
       this.waitingAdmission = false
       this.releaseProfile()
       return

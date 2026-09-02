@@ -37,6 +37,24 @@ const osascript = async (script, timeout = 25_000) => {
 
 const tell = (body) => `tell application id ${quote(BUNDLE_ID)}\n${body}\nend tell`
 
+// Never send an Apple Event to a browser that is not running. `tell application
+// id ...` LAUNCHES the app when it is not — and this app is a copy of Chrome,
+// so launching it without a --user-data-dir makes it join the user's own Chrome
+// and open windows there. One stray `count of windows` did exactly that, twice.
+// System Events answers without launching anything.
+const browserRunning = async () => {
+  const out = await osascript(
+    `tell application "System Events" to return (exists (first application process whose bundle identifier is ${quote(BUNDLE_ID)}))`,
+    10_000,
+  ).catch(() => 'false')
+  return out.trim() === 'true'
+}
+
+const speak = async (body) => {
+  if (!(await browserRunning())) throw new Error('the Call Bots browser is not running')
+  return osascript(tell(body))
+}
+
 // A copy of Chrome with its own bundle identifier, so AppleScript can address
 // the bots' browser without ever reaching the user's. Built once and kept.
 export const ensureGuestBundle = async () => {
@@ -60,7 +78,7 @@ export const ensureGuestBundle = async () => {
 }
 
 const windowIds = async () => {
-  const out = await osascript(tell('return id of every window')).catch(() => '')
+  const out = await speak('return id of every window').catch(() => '')
   return out.split(',').map((value) => value.trim()).filter(Boolean)
 }
 
@@ -72,16 +90,33 @@ const startShared = async (media, options) => {
   // Scripting is a per-profile preference with no command-line flag, and it has
   // to be there before Chrome first reads the profile.
   mkdirSync(join(userDataDir, 'Default'), { recursive: true })
+  const allow = { 'https://meet.google.com:443,*': { setting: 1 } }
   writeFileSync(
     join(userDataDir, 'Default', 'Preferences'),
-    JSON.stringify({ browser: { allow_javascript_apple_events: true } }),
+    JSON.stringify({
+      browser: { allow_javascript_apple_events: true },
+      // Nobody is here to click Allow. Without the camera and microphone
+      // already granted, Meet sits on "Continue without microphone and camera"
+      // and never offers to use them. Playwright's grantPermissions is not an
+      // option here — this window has no debugger attached, which is the whole
+      // point — so the grant is seeded as a content setting instead, the same
+      // record Chrome writes when a person clicks Allow.
+      profile: {
+        content_settings: {
+          exceptions: { media_stream_camera: allow, media_stream_mic: allow },
+        },
+      },
+    }),
   )
 
   const child = spawn(
     join(bundle, 'Contents/MacOS/Google Chrome'),
     [
       `--user-data-dir=${userDataDir}`,
-      '--incognito',
+      // Not incognito. A throwaway profile is already signed out, which is all
+      // a guest needs, and incognito refuses to inherit the camera and
+      // microphone grant seeded below — leaving Meet stuck offering to join
+      // without them.
       '--lang=en-US',
       '--no-first-run',
       '--no-default-browser-check',
@@ -101,10 +136,14 @@ const startShared = async (media, options) => {
     { stdio: 'ignore', detached: true },
   )
 
+  // Wait for the process to exist before addressing it, or the first Apple
+  // Event launches a second copy into the user's Chrome.
   const deadline = Date.now() + READY_TIMEOUT
   while (Date.now() < deadline) {
-    const ids = await windowIds()
-    if (ids.length > 0) return { child, userDataDir, windows: new Set(), spare: ids[0] }
+    if (await browserRunning()) {
+      const ids = await windowIds()
+      if (ids.length > 0) return { child, userDataDir, windows: new Set(), spare: ids[0] }
+    }
     await new Promise((resolve) => setTimeout(resolve, 300))
   }
   stop(child, userDataDir)
@@ -131,6 +170,28 @@ const stop = (child, userDataDir) => {
 // Serialised: two guests starting at once must not each start a browser.
 let starting = null
 
+// The browser is detached so a group kill can target it precisely, which also
+// means nothing kills it for us. A run that dies without tearing down would
+// otherwise leave its windows on screen for good.
+let exitHooked = false
+const killOnExit = () => {
+  if (exitHooked) return
+  exitHooked = true
+  const bail = () => {
+    if (!shared) return
+    const { child, userDataDir } = shared
+    shared = null
+    stop(child, userDataDir)
+  }
+  process.once('exit', bail)
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.once(signal, () => {
+      bail()
+      process.exit(signal === 'SIGINT' ? 130 : 143)
+    })
+  }
+}
+
 export class GuestWindow {
   constructor(windowId) {
     this.windowId = windowId
@@ -139,6 +200,7 @@ export class GuestWindow {
 
   static async open(media, options) {
     if (!shared) {
+      killOnExit()
       starting ??= startShared(media, options).finally(() => {
         starting = null
       })
@@ -151,7 +213,7 @@ export class GuestWindow {
     shared.spare = null
     if (!windowId) {
       const before = new Set(await windowIds())
-      await osascript(tell('make new window with properties {mode:"incognito"}'))
+      await speak('make new window with properties {mode:"incognito"}')
       const deadline = Date.now() + 20_000
       while (Date.now() < deadline && !windowId) {
         windowId = (await windowIds()).find((id) => !before.has(id)) ?? null
@@ -169,11 +231,11 @@ export class GuestWindow {
 
   async url() {
     if (this.closed) return 'about:blank'
-    return osascript(tell(`return URL of ${this.#tab()}`)).catch(() => 'about:blank')
+    return speak(`return URL of ${this.#tab()}`).catch(() => 'about:blank')
   }
 
   async goto(target) {
-    await osascript(tell(`set URL of ${this.#tab()} to ${quote(target)}`))
+    await speak(`set URL of ${this.#tab()} to ${quote(target)}`)
     // `set URL` returns as soon as the navigation is asked for.
     const deadline = Date.now() + 45_000
     while (Date.now() < deadline) {
@@ -188,7 +250,7 @@ export class GuestWindow {
   // error. Anything structured is stringified in-page and parsed here.
   async evaluate(source) {
     if (this.closed) throw new Error('this Meet guest window is closed')
-    const out = await osascript(tell(`return execute ${this.#tab()} javascript ${quote(source)}`))
+    const out = await speak(`return execute ${this.#tab()} javascript ${quote(source)}`)
     if (out === 'missing value' || out === '') return null
     try {
       return JSON.parse(out)
@@ -208,7 +270,7 @@ export class GuestWindow {
   async close() {
     if (this.closed) return
     this.closed = true
-    await osascript(tell(`close (first window whose id is ${this.windowId})`)).catch(() => {
+    await speak(`close (first window whose id is ${this.windowId})`).catch(() => {
       // A window somebody already closed is not a teardown failure.
     })
     shared?.windows.delete(this.windowId)

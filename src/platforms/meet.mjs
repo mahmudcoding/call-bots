@@ -104,7 +104,7 @@ const NO_DEVICES_NAME = /continue without (?:microphone|mic|camera)/iu
 // Its opposite, and the one to click. A guest window gets asked this outright
 // rather than inheriting a granted permission, and a bot that never answers is
 // left looking at the refusal the dialog is sitting on top of.
-const USE_DEVICES_NAME = /use (?:microphone and camera|camera and microphone)/iu
+const USE_DEVICES_NAME = /\buse\b[^.]{0,20}\b(?:microphone|camera)\b/iu
 
 const REFUSALS = [
   /You can'?t join this (?:video )?call/iu,
@@ -153,101 +153,6 @@ const parse = (url) => {
   }
 }
 
-// ---------------------------------------------------------------------------
-// One read per tick.
-
-// Everything the join loop needs, in a single evaluate. Splitting this back
-// into separate isVisible() calls is what made the old version cost four page
-// round-trips and two whole-document innerText scrapes every 500ms.
-const readPage = (page, { withText = false } = {}) =>
-  page.evaluate(
-    ({ sel, text, withText }) => {
-      const rx = (source) => new RegExp(source, 'iu')
-      const vis = (el) =>
-        Boolean(el) && Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-      const label = (el) =>
-        ((el && (el.getAttribute('aria-label') || el.textContent)) || '')
-          .replace(/\s+/gu, ' ')
-          .trim()
-
-      const allVisible = (selector) => [...document.querySelectorAll(selector)].filter(vis)
-
-      // Prefer the control that carries data-is-muted: on a screen showing both
-      // the toolbar button and a settings menu entry, only one of them is the
-      // toggle, and it is always that one.
-      const device = (selector) => {
-        const found = allVisible(selector)
-        const el = found.find((node) => node.hasAttribute('data-is-muted')) ?? found[0]
-        if (!el) return 'unknown'
-        if (el.getAttribute('aria-disabled') === 'true' || el.disabled === true) return 'request'
-        const muted = el.getAttribute('data-is-muted')
-        if (muted === 'true') return 'off'
-        if (muted === 'false') return 'on'
-        const name = label(el).toLowerCase()
-        if (/turn on/u.test(name)) return 'off'
-        if (/turn off/u.test(name)) return 'on'
-        return 'unknown'
-      }
-
-      const buttons = []
-      for (const el of document.querySelectorAll('button, [role="button"]')) {
-        if (buttons.length >= 60) break
-        if (!vis(el)) continue
-        const name = label(el).slice(0, 80)
-        if (name) buttons.push(name)
-      }
-      const has = (source) => {
-        const pattern = rx(source)
-        return buttons.some((name) => pattern.test(name))
-      }
-
-      const leave = allVisible(sel.leaveButton).length > 0
-      const mic = device(sel.mic)
-      const cam = device(sel.cam)
-
-      // The expensive read, and the only one that needs the whole page. Once
-      // the leave control exists the bot is in and nothing here is consulted,
-      // so the cost falls away exactly when the long wait begins.
-      const headline =
-        leave || !withText
-          ? ''
-          : (document.body ? document.body.innerText : '')
-              .replace(/\n{2,}/gu, '\n')
-              .slice(0, 1500)
-
-      return {
-        // Meet's own offline page, and it renders in whatever language Chrome
-        // feels like — this browser knows the answer without reading any of it.
-        offline: navigator.onLine === false,
-        leave,
-        mic,
-        cam,
-        nameField: allVisible(sel.anonymousName).length > 0,
-        joinButton: has(text.join),
-        askToJoin: has(text.ask),
-        dismissible: has(text.dismiss),
-        useDevices: has(text.useDevices),
-        consent: has(text.consent),
-        noDevices: has(text.noDevices),
-        presenting: allVisible(sel.stopPresent).length > 0,
-        canPresent: allVisible(sel.present).length > 0,
-        headline,
-      }
-    },
-    {
-      sel: SEL,
-      withText,
-      text: {
-        join: JOIN_NAME.source,
-        ask: ASK_NAME.source,
-        dismiss: DISMISS_NAME.source,
-        consent: CONSENT_NAME.source,
-        noDevices: NO_DEVICES_NAME.source,
-        useDevices: USE_DEVICES_NAME.source,
-      },
-    },
-  )
-
 // Smart quotes normalised so the patterns above can spell it "can't".
 const plain = (value) => String(value ?? '').replace(/[‘’ʼ]/gu, "'")
 
@@ -288,8 +193,11 @@ const classify = (read, url, guest) => {
   } catch {}
   if (host === 'accounts.google.com') return { stage: 'signin' }
   // The same field means opposite things to the two kinds of bot: a guest is
-  // being asked to introduce itself, an account bot has lost its session.
-  if (read.nameField) return { stage: guest ? 'name-entry' : 'signin' }
+  // being asked to introduce itself, an account bot has lost its session. Meet
+  // leaves the field on screen after it is filled, so only an EMPTY one is
+  // still asking — otherwise a guest retypes its name forever.
+  if (read.nameField && !read.named) return { stage: guest ? 'name-entry' : 'signin' }
+  if (read.nameField && !guest) return { stage: 'signin' }
   if (host === 'meet.google.com' && HOME_PATH.test(path)) {
     return {
       stage: 'refused',
@@ -310,9 +218,14 @@ const classify = (read, url, guest) => {
 
   // Recognised before the join button, because Meet renders this dialog OVER
   // the pre-join screen and the join button underneath it stays visible.
-  if (read.noDevices || DEVICE_TROUBLE.test(plain(read.headline))) {
-    return { stage: 'no-devices' }
+  // Meet offers this on the ordinary pre-join screen, beside working device
+  // toggles, and offers it during the load before those toggles exist. It is a
+  // fault only when nothing else is on offer and no device ever appears — which
+  // the join loop decides by waiting, not by one reading.
+  if (read.noDevices && !read.useDevices && read.mic === 'unknown' && read.cam === 'unknown') {
+    return { stage: 'maybe-no-devices' }
   }
+  if (DEVICE_TROUBLE.test(plain(read.headline))) return { stage: 'no-devices' }
   if (read.consent) return { stage: 'consent' }
   if (LOBBY.test(plain(read.headline))) return { stage: 'lobby' }
   if (read.joinButton) return { stage: 'prejoin' }
@@ -320,32 +233,144 @@ const classify = (read, url, guest) => {
 }
 
 // ---------------------------------------------------------------------------
-// Clicking.
+// Talking to the page.
+//
+// Everything below goes through one primitive: evaluate a single-line
+// JavaScript expression that returns a JSON string. That is the only thing a
+// guest window can do — it is driven through Chrome's AppleScript interface,
+// which takes a string and nothing else — and a Playwright page does it too, so
+// one adapter drives both kinds of bot.
+//
+// Single line is not a style choice. AppleScript string literals cannot span
+// lines, and a multi-line script comes back as `missing value` rather than an
+// error.
 
-const byName = (page, name) =>
-  page.getByRole('button', { name }).filter({ visible: true }).first()
+const oneLine = (source) => source.replace(/\s*\n\s*/gu, ' ').trim()
 
-// Meet keeps the pre-join controls in the document after entry, just hidden, so
-// a plain .first() resolves the wrong copy and then waits out its whole timeout
-// on an element that will never be clickable. The page-side reader already
-// picks the visible one; this is how the clicking side agrees with it.
-const onScreen = (page, selector) => page.locator(selector).filter({ visible: true }).first()
+// Inlined into every source below. No `//` comments in here, and no literal
+// newlines — write `[\r\n]` in a character class instead.
+const HELPERS = `
+var __vis = function (e) {
+  return !!(e && (e.offsetWidth || e.offsetHeight || (e.getClientRects && e.getClientRects().length)))
+};
+var __all = function (s) { return [].slice.call(document.querySelectorAll(s)).filter(__vis) };
+var __label = function (e) {
+  return ((e && (e.getAttribute('aria-label') || e.textContent)) || '').replace(/\\s+/g, ' ').trim()
+};
+var __find = function (rx) {
+  var r = new RegExp(rx, 'i'), i;
+  var n = __all('button,[role=button],[role=menuitem]');
+  for (i = 0; i < n.length; i += 1) { if (r.test(__label(n[i]))) return n[i] }
+  var best = null, all = document.querySelectorAll('*');
+  for (i = 0; i < all.length; i += 1) {
+    var e = all[i];
+    if (!__vis(e)) continue;
+    if (!r.test(__label(e))) continue;
+    if (!best || e.compareDocumentPosition(best) & Node.DOCUMENT_POSITION_CONTAINS) best = e;
+    else if (best.contains(e)) best = e;
+  }
+  return best
+};
+var __device = function (sel) {
+  var f = __all(sel), el = null, i;
+  for (i = 0; i < f.length; i += 1) { if (f[i].hasAttribute('data-is-muted')) { el = f[i]; break } }
+  if (!el) el = f[0];
+  if (!el) return 'unknown';
+  if (el.getAttribute('aria-disabled') === 'true' || el.disabled === true) return 'request';
+  var m = el.getAttribute('data-is-muted');
+  if (m === 'true') return 'off';
+  if (m === 'false') return 'on';
+  var n = __label(el).toLowerCase();
+  if (/turn on/.test(n)) return 'off';
+  if (/turn off/.test(n)) return 'on';
+  return 'unknown'
+};
+`
 
-// Meet's DOM re-renders under every click, so a control resolved a moment ago
-// can be detached by the time it is clicked. Playwright retries within the
-// timeout; what matters here is that a failure comes back as false instead of
-// escaping as a raw Playwright error — an unhandled throw out of join() leaves
-// the Guest stuck in 'joining' forever, where recoverIfAdmitted cannot reach it.
-const tryClick = async (locator, timeout = 5_000) =>
-  locator
-    .click({ timeout })
-    .then(() => true)
-    .catch(() => false)
+const js = (value) => JSON.stringify(value)
 
-const declineConsent = async (page) => {
-  await tryClick(byName(page, CONSENT_NAME), 3_000)
-  await page.waitForLoadState('domcontentloaded').catch(() => {})
+// Whatever comes back, hand the caller a value. A Playwright page returns the
+// string the expression produced; a guest window has already tried to parse it.
+const evaluate = async (page, source) => {
+  const raw = await page.evaluate(source)
+  if (raw === null || raw === undefined) return null
+  if (typeof raw !== 'string') return raw
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
+  }
 }
+
+const readSource = (withText) =>
+  oneLine(`(function(){${HELPERS}
+    var leave = __all(${js(SEL.leaveButton)}).length > 0;
+    var headline = (leave || !${withText ? 'true' : 'false'})
+      ? ''
+      : ((document.body ? document.body.innerText : '') || '')
+          .replace(/[\\r\\n]{2,}/g, '\\n').slice(0, 1500);
+    return JSON.stringify({
+      offline: navigator.onLine === false,
+      leave: leave,
+      mic: __device(${js(SEL.mic)}),
+      cam: __device(${js(SEL.cam)}),
+      nameField: __all(${js(SEL.anonymousName)}).length > 0,
+      named: !!(__all(${js(SEL.anonymousName)})[0] || {}).value,
+      joinButton: !!__find(${js(JOIN_NAME.source)}),
+      askToJoin: !!__find(${js(ASK_NAME.source)}),
+      dismissible: !!__find(${js(DISMISS_NAME.source)}),
+      useDevices: !!__find(${js(USE_DEVICES_NAME.source)}),
+      consent: !!__find(${js(CONSENT_NAME.source)}),
+      noDevices: !!__find(${js(NO_DEVICES_NAME.source)}),
+      presenting: __all(${js(SEL.stopPresent)}).length > 0,
+      canPresent: __all(${js(SEL.present)}).length > 0,
+      headline: headline
+    })
+  })()`)
+
+const readPage = (page, { withText = false } = {}) => evaluate(page, readSource(withText))
+
+// Clicking is `element.click()`, the same call the page's own code makes. There
+// is no locator here to auto-wait, so the join loop retries instead.
+const clickNamed = (page, pattern) =>
+  evaluate(
+    page,
+    oneLine(`(function(){${HELPERS}
+      var el = __find(${js(pattern.source)});
+      if (!el) return 'false';
+      el.click();
+      return 'true'
+    })()`),
+  ).then((ok) => ok === true).catch(() => false)
+
+const clickSelector = (page, selector) =>
+  evaluate(
+    page,
+    oneLine(`(function(){${HELPERS}
+      var f = __all(${js(selector)}), el = null, i;
+      for (i = 0; i < f.length; i += 1) { if (f[i].hasAttribute('data-is-muted')) { el = f[i]; break } }
+      if (!el) el = f[0];
+      if (!el) return 'false';
+      el.click();
+      return 'true'
+    })()`),
+  ).then((ok) => ok === true).catch(() => false)
+
+// Meet's name field is React-controlled: assigning to .value updates the DOM
+// and leaves React's state untouched, so the join button stays disabled.
+const typeName = (page, displayName) =>
+  evaluate(
+    page,
+    oneLine(`(function(){${HELPERS}
+      var el = __all(${js(SEL.anonymousName)})[0];
+      if (!el) return 'false';
+      var set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      set.call(el, ${js(String(displayName ?? '').slice(0, 60))});
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return 'true'
+    })()`),
+  ).then((ok) => ok === true).catch(() => false)
 
 // ---------------------------------------------------------------------------
 // Devices.
@@ -370,11 +395,7 @@ const setDevice = async ({ page, log }, kind, which, on) => {
   const want = on ? 'on' : 'off'
   if (current === want) return want
 
-  // Resolve and click in one step. Reading the state and then re-resolving the
-  // button separately is a null dereference waiting to happen on a DOM that
-  // re-renders as often as this one.
-  const clicked = await tryClick(onScreen(page, selector), TOGGLE_TIMEOUT)
-  if (!clicked) {
+  if (!(await clickSelector(page, selector))) {
     log.warn(`${kind} button did not accept a click`)
     return deviceState(page, which)
   }
@@ -396,17 +417,17 @@ const setDevice = async ({ page, log }, kind, which, on) => {
 // ---------------------------------------------------------------------------
 // Screen share.
 //
-// The capture shim replaces getDisplayMedia with a canvas captureStream before
-// Meet's bundle loads, so Meet never reaches Chrome's source picker: whichever
-// entry of its present menu gets clicked, the same synthetic screen comes back.
+// Disabled by capability — live Meet is handed a real track and then refuses to
+// start presenting — but kept correct against the DOM so re-enabling it is one
+// boolean if that ever changes.
 
 const screenState = async (page) => {
   const read = await readPage(page).catch(() => null)
   if (!read) return 'unknown'
   if (read.presenting) return 'on'
   if (read.canPresent) return 'off'
-  // In the call with no present control at all is Meet's way of saying the host
-  // turned presenting off for everyone.
+  // In the call with no present control at all is Meet saying the host turned
+  // presenting off for everyone.
   return read.leave ? 'blocked' : 'unknown'
 }
 
@@ -425,16 +446,16 @@ const setScreen = async (ctx, on) => {
   if (current === want) return want
 
   if (!on) {
-    await tryClick(onScreen(page, SEL.stopPresent), SHARE_TIMEOUT)
+    await clickSelector(page, SEL.stopPresent)
   } else {
     await ctx.prepareScreen()
-    if (!(await tryClick(onScreen(page, SEL.present), SHARE_TIMEOUT))) {
+    if (!(await clickSelector(page, SEL.present))) {
       log.warn('the present control did not accept a click')
       return screenState(page)
     }
-    // The menu entry only decides what Meet ASKS for; the shim decides what it
-    // gets. A tab is asked for because it is the cheapest thing to grant.
-    await tryClick(byName(page, /a tab|chrome tab|entire screen|a window/iu), 4_000)
+    // Which entry gets picked only decides what Meet ASKS for; the capture shim
+    // decides what it gets. Absent on a live Meet, which shows no menu at all.
+    await clickNamed(page, /a tab|chrome tab|entire screen|a window/iu)
   }
 
   const deadline = Date.now() + SHARE_TIMEOUT
@@ -445,15 +466,6 @@ const setScreen = async (ctx, on) => {
   log.warn(`screen share did not reach "${want}" in time`)
   return screenState(page)
 }
-
-// ---------------------------------------------------------------------------
-// Join.
-
-const typeName = async (page, displayName) =>
-  onScreen(page, SEL.anonymousName)
-    .fill(String(displayName ?? '').slice(0, 60), { timeout: 5_000 })
-    .then(() => true)
-    .catch(() => false)
 
 const failSignedOut = async ({ meetProfile, fail }) => {
   meetProfile?.markNeedsSignIn?.()
@@ -491,6 +503,7 @@ const join = async (ctx) => {
   let armed = false
   let dismissals = 0
   let nonEnglishSince = null
+  let noDevicesSince = null
   let clickedAt = 0
 
   for (;;) {
@@ -501,7 +514,9 @@ const join = async (ctx) => {
       await page.waitForTimeout(POLL_FAST)
       continue
     }
-    const { stage, detail } = classify(read, page.url(), guest)
+    // Sync on a Playwright page, async on a guest window.
+    const url = await Promise.resolve(page.url()).catch(() => '')
+    const { stage, detail } = classify(read, url, guest)
     if (process.env.CALL_BOTS_DEBUG_MEET) {
       console.error('[meet]', stage, JSON.stringify({ ...read, headline: read.headline.slice(0, 90) }))
     }
@@ -512,7 +527,7 @@ const join = async (ctx) => {
       // controls the rest of this adapter needs to click.
       if (read.dismissible && dismissals < 4) {
         dismissals += 1
-        await tryClick(byName(page, DISMISS_NAME), 2_000)
+        await clickNamed(page, DISMISS_NAME)
       }
       return { callId: target.callId }
     }
@@ -525,7 +540,7 @@ const join = async (ctx) => {
     }
 
     if (stage === 'devices-ask') {
-      await tryClick(byName(page, USE_DEVICES_NAME), 5_000)
+      await clickNamed(page, USE_DEVICES_NAME)
       await page.waitForTimeout(POLL_FAST)
       continue
     }
@@ -557,7 +572,19 @@ const join = async (ctx) => {
       await fail('entry', 'this machine lost its network connection — Meet cannot load')
     }
 
-    if (stage === 'no-devices') {
+    // Held for a while before it counts: the offer shows up mid-load, before
+    // Meet has drawn the device toggles that prove there was never a fault.
+    if (stage === 'maybe-no-devices') {
+      noDevicesSince ??= Date.now()
+      if (Date.now() - noDevicesSince < 15_000) {
+        await page.waitForTimeout(POLL_FAST)
+        continue
+      }
+    } else {
+      noDevicesSince = null
+    }
+
+    if (stage === 'no-devices' || stage === 'maybe-no-devices') {
       await fail(
         'entry',
         'Chrome gave this bot no camera or microphone — Meet offered to join without them, ' +
@@ -566,7 +593,7 @@ const join = async (ctx) => {
     }
 
     if (stage === 'consent') {
-      await declineConsent(page)
+      await clickNamed(page, CONSENT_NAME)
       await page.waitForTimeout(POLL_FAST)
       continue
     }
@@ -574,7 +601,7 @@ const join = async (ctx) => {
     if (stage === 'prejoin') {
       if (read.dismissible && dismissals < 4) {
         dismissals += 1
-        await tryClick(byName(page, DISMISS_NAME), 2_000)
+        await clickNamed(page, DISMISS_NAME)
         continue
       }
       // Meet remembers the last device state per profile, so set what was asked
@@ -592,7 +619,7 @@ const join = async (ctx) => {
       // One click, then let Meet work. Still sitting on the pre-join screen
       // eight seconds later means the click did not take, and re-clicking is
       // the recovery — but firing it every tick is not.
-      if (Date.now() - clickedAt > 8_000 && (await tryClick(byName(page, JOIN_NAME), 10_000))) {
+      if (Date.now() - clickedAt > 8_000 && (await clickNamed(page, JOIN_NAME))) {
         clickedAt = Date.now()
         if (phase === 'entry') {
           phase = asking ? 'lobby' : 'joining'
@@ -760,8 +787,6 @@ export default {
   remote,
   leave: async ({ page, log }) => {
     // Called for every bot on teardown, including ones that never got in.
-    const button = onScreen(page, SEL.leaveButton)
-    if ((await button.count().catch(() => 0)) === 0) return
-    if (await tryClick(button, 5_000)) log.info('left Google Meet')
+    if (await clickSelector(page, SEL.leaveButton)) log.info('left Google Meet')
   },
 }
