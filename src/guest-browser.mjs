@@ -18,7 +18,7 @@
 // See CLAUDE.md for the measurements behind every line of this.
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -242,6 +242,7 @@ const readInternals = async () => {
 }
 
 const startShared = async (media, options) => {
+  clearStaleProfiles()
   const bundle = await ensureGuestBundle()
   const userDataDir = mkdtempSync(join(tmpdir(), 'call-bots-meet-guests-'))
   // Scripting is a per-profile preference with no command-line flag, and it has
@@ -324,16 +325,39 @@ const stop = (child, userDataDir) => {
       // Already gone.
     }
   }
-  // Chrome is still unlinking its own files for a moment after the kill, so the
-  // first removal usually loses the race and leaves the profile behind.
+  // Chrome keeps unlinking its own files for several seconds after the kill,
+  // and a removal that lands inside that window loses — measured as one
+  // profile left behind per run at 2.5 s of retries. Keep trying for a while,
+  // and let startShared clear whatever a crashed run left.
   const sweep = (attempt = 0) => {
     try {
       rmSync(userDataDir, { recursive: true, force: true })
     } catch {
-      if (attempt < 5) setTimeout(() => sweep(attempt + 1), 500).unref?.()
+      if (attempt < 20) setTimeout(() => sweep(attempt + 1), 1000).unref?.()
     }
   }
   sweep()
+}
+
+// Profiles a previous run could not remove — it crashed, or Chrome outlived
+// its sweep. Nothing else refers to them once their browser is gone.
+const clearStaleProfiles = () => {
+  const dir = tmpdir()
+  let names = []
+  try {
+    names = readdirSync(dir).filter((name) => name.startsWith('call-bots-meet-guests-'))
+  } catch {
+    return
+  }
+  for (const name of names) {
+    const path = join(dir, name)
+    if (shared && path === shared.userDataDir) continue
+    try {
+      rmSync(path, { recursive: true, force: true })
+    } catch {
+      // Still held by something; the next start tries again.
+    }
+  }
 }
 
 // Serialised: two guests starting at once must not each start a browser.
