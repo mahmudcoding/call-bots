@@ -33,15 +33,6 @@ const bounded = (promise, fallback) =>
 // 'account' when asked for — and anywhere guests cannot exist: a guest is a
 // real Chrome window driven through Apple Events, which is a macOS thing.
 // Otherwise a Meet run needs no setup at all.
-const MEET_CLIP_MAX = 1280
-const withMeetClip = (options) => {
-  const [width, height] = String(options.size ?? '1920x1080').split('x').map(Number)
-  if (!width || !height || width <= MEET_CLIP_MAX) return options
-  const scale = MEET_CLIP_MAX / width
-  const even = (value) => Math.round((value * scale) / 2) * 2
-  return { ...options, size: `${MEET_CLIP_MAX}x${even(height)}` }
-}
-
 const pool = async (items, worker, concurrency) => {
   const queue = [...items]
   const failures = []
@@ -167,9 +158,7 @@ export class Roster {
     log.info(`preparing ${users.length} bot(s)`)
     let media
     try {
-      // Meet sends at most 720p, so a 1080p camera clip is decoded and scaled
-      // down for nothing — on a machine these bots already push to its limit.
-      media = await ensureGuestFixtures(users, isMeet ? withMeetClip(this.options) : this.options)
+      media = await ensureGuestFixtures(users, this.options)
     } catch (error) {
       throw error
     }

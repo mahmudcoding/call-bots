@@ -189,19 +189,22 @@ Clicking is plain `element.click()`.
   integer is "no such object" (-1728). Errors keep their Apple Event numbers:
   -1743 is the Automation grant, -600 no such process. The grant is per target
   bundle, so more processes of the same bundle cost no new prompts. Each
-  process is ~200 MB more than a window would have been; four guests measured
-  at a load average of 10 on the 8-core M3 (the shared-process design had
-  four at 48, before the small windows and the 720p clip).
+  process is ~200 MB more than a window would have been.
 - **About three guests on an 8-core M3 with 16 GB.** Each is a Chrome window
   encoding AV1 and decoding everyone else. Three sat at a load average of 9;
   a fourth took it to 48, Apple Events took seconds each, every probe timed
   out and the dashboard went blank. `machineProfile().meetMax` is
-  `cores / 2.5` and the orchestrator warns past it. Two things bought
-  headroom: the guest windows are 640×440 and tiled — Meet requests video
-  sized to the tiles it draws, and remote video dropped from ~3 Mbps to
-  ~250 kbps per guest — and the Meet camera clip is capped at 1280 wide
-  (`withMeetClip`), since Meet sends at most 720p and a 1080p clip was decoded
-  and scaled for nothing.
+  `cores / 2.5` and the orchestrator warns past it. Two savings were tried
+  and taken back out, because a load test must not measure less than real
+  users cause: small tiled windows (Meet sizes what it requests by the tiles
+  it draws — remote video fell to 640×360 at ~250 kbps per stream) and a
+  720p camera clip. Guest windows now give Meet a 1920×1080 page area like
+  an Aloqa bot's viewport, cascaded, with
+  `--disable-backgrounding-occluded-windows --disable-renderer-backgrounding`
+  so the covered ones keep rendering (Meet pauses video in a hidden window).
+  Measured at that size in a three-person call: 960×540 at ~900 kbps per
+  remote stream, ~2.3 Mbps down per guest, three guests at a load average
+  of 11 on the 8-core M3.
 - **Visible windows**, N of them.
 - **Permission prompts the first time.** One Automation prompt — the app asking
   to control the *Call Bots browser* — because driving Chrome without a debugger

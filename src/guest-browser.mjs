@@ -266,20 +266,24 @@ const registerBundle = async () => {
 // ---------------------------------------------------------------------------
 // Windows.
 
-// Guest windows are small and tiled, not left where Chrome drops them, one on
-// top of another at full size. Meet sizes what it asks the server for by the
-// tiles it draws, so a small window receives small video — the difference
-// between three guests and five on the same machine — and the desktop stays
-// legible with several of them open.
-const WINDOW_W = 640
-const WINDOW_H = 440
-const COLUMNS = 3
+// Guest windows give Meet the same page area an Aloqa bot has — a 1920×1080
+// viewport — cascaded a little so a person can tell them apart. Meet sizes
+// what it asks the server for by the tiles it draws, so a smaller window would
+// receive smaller video and a load test would measure less than real users
+// cause; the bots are here to be real users. (Small tiled windows were tried:
+// remote video fell to 640×360 at ~250 kbps per stream, against 960×540 at
+// ~900 kbps in a three-person call at this size — exactly the saving a test
+// must not make.) The window is the viewport plus Chrome's tab strip and
+// toolbar, measured at 87 px on the guests' profile. Stacked windows keep
+// rendering because the browser is launched with occlusion backgrounding off;
+// without that, Meet would pause video in every window but the top one.
+const WINDOW_W = 1920
+const WINDOW_H = 1080 + 87
+const CASCADE = 36
 let slots = 0
 const placeWindow = async (proc, windowId, slot) => {
-  const col = slot % COLUMNS
-  const row = Math.floor(slot / COLUMNS) % 3
-  const x = col * WINDOW_W
-  const y = 40 + row * (WINDOW_H + 10)
+  const x = (slot % 12) * CASCADE
+  const y = 40 + (slot % 12) * CASCADE
   await speak(proc, ['bounds', windowId, String(x), String(y), String(WINDOW_W), String(WINDOW_H)]).catch(() => {})
 }
 
@@ -410,6 +414,11 @@ const startProcess = async (media, options) => {
       '--password-store=basic',
       '--mute-audio',
       '--autoplay-policy=no-user-gesture-required',
+      // Full-size windows stack, and a window another covers counts as
+      // hidden: Chrome backgrounds its renderer and Meet pauses its video.
+      // A real user's window is on top; every bot's must behave as if it were.
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream',
       // This process's own clip and voice: the flags are process-wide, and
       // the process is this guest's alone.

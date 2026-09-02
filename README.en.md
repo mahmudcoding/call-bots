@@ -73,10 +73,10 @@ devices are per process, and addressing one process among several took a
 small compiled helper that ships inside the app; CLAUDE.md has the story.)
 
 Plan on **about three guests per 8-core Mac**: each is a full Chrome process
-encoding and decoding video. Four ran fine on a 16 GB M3, and Call Bots warns
-when a send goes past what the machine can carry. Guest windows are small and
-tiled on purpose — Meet sends them video sized to the tiles they draw, which
-is most of the headroom.
+encoding and decoding video at the size a real user's window is — the same
+1920×1080 page area an Aloqa bot has — so what the call measures is what real
+users would cause. Call Bots warns when a send goes past what the machine can
+carry.
 
 ## What Meet will not do
 
