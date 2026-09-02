@@ -330,78 +330,6 @@ const readSource = (withText) =>
 
 const readPage = (page, { withText = false } = {}) => evaluate(page, readSource(withText))
 
-// A guest is driven through AppleScript, so nothing hooks the page at
-// document-start the way addInitScript does for every other bot — and without a
-// hook there is no seeing Meet's peer connections at all: it keeps them in
-// module closures, out of reach of any scan from `window`. This goes in as soon
-// as the document exists, which beats Meet's bundle to its first connection,
-// and keeps its own rolling snapshot because AppleScript can hand back a value
-// but can never wait on a promise.
-const STATS_SOURCE = oneLine(`(function(){
-  if (window.__botGuestStats__) return '"already"';
-  var Native = window.RTCPeerConnection;
-  if (!Native) return '"no-rtc"';
-  var live = new Set();
-  var Wrapped = function RTCPeerConnection() {
-    var pc = new (Function.prototype.bind.apply(Native, [null].concat([].slice.call(arguments))))();
-    live.add(pc);
-    return pc
-  };
-  Wrapped.prototype = Native.prototype;
-  try { Object.setPrototypeOf(Wrapped, Native) } catch (e) {}
-  window.RTCPeerConnection = Wrapped;
-  if ('webkitRTCPeerConnection' in window) window.webkitRTCPeerConnection = Wrapped;
-  window.__botPeerConnections__ = live;
-  var empty = function () { return { pcs: 0, up: 0, upV: 0, down: 0, rtt: null, out: { a: 0, v: 0 }, in: { a: 0, v: 0 } } };
-  var snap = empty();
-  var prev = new Map();
-  var r1 = function (v) { return (typeof v === 'number' && isFinite(v)) ? Math.round(v * 10) / 10 : null };
-  var tick = function () {
-    var pcs = [];
-    live.forEach(function (pc) {
-      try {
-        if (pc.connectionState === 'closed' || pc.signalingState === 'closed') live.delete(pc);
-        else pcs.push(pc)
-      } catch (e) { live.delete(pc) }
-    });
-    if (!pcs.length) { snap = empty(); return }
-    var now = Date.now(), seen = new Map(), up = 0, upV = 0, down = 0, rtt = null;
-    var oa = new Set(), ov = new Set(), ia = new Set(), iv = new Set(), pending = pcs.length;
-    pcs.forEach(function (pc) {
-      pc.getStats().then(function (rep) {
-        rep.forEach(function (st) {
-          if (st.type === 'candidate-pair' && st.state === 'succeeded' && st.currentRoundTripTime != null) {
-            rtt = st.currentRoundTripTime * 1000
-          }
-          if (st.type !== 'outbound-rtp' && st.type !== 'inbound-rtp') return;
-          var key = st.type + ':' + st.id;
-          var bytes = (st.bytesSent != null ? st.bytesSent : st.bytesReceived) || 0;
-          seen.set(key, { bytes: bytes, at: now });
-          var was = prev.get(key);
-          var kbps = (was && now > was.at) ? ((bytes - was.bytes) * 8) / (now - was.at) : 0;
-          var track = st.trackIdentifier || st.id;
-          if (st.type === 'outbound-rtp') {
-            up += kbps;
-            if (st.kind === 'video') { upV += kbps; ov.add(track) } else oa.add(track)
-          } else {
-            down += kbps;
-            if (st.kind === 'video') iv.add(track); else ia.add(track)
-          }
-        })
-      }).catch(function () {}).then(function () {
-        pending -= 1;
-        if (pending > 0) return;
-        prev = seen;
-        snap = { pcs: pcs.length, up: r1(up), upV: r1(upV), down: r1(down), rtt: r1(rtt),
-          out: { a: oa.size, v: ov.size }, in: { a: ia.size, v: iv.size } }
-      })
-    })
-  };
-  setInterval(tick, 1000);
-  window.__botGuestStats__ = function () { return JSON.stringify(snap) };
-  return '"installed"'
-})()`)
-
 // Clicking is `element.click()`, the same call the page's own code makes. There
 // is no locator here to auto-wait, so the join loop retries instead.
 const clickNamed = (page, pattern) =>
@@ -560,9 +488,7 @@ const join = async (ctx) => {
   const { page, target, log, fail, options, setWaitingAdmission, displayName } = ctx
   const guest = !ctx.meetProfile
   try {
-    // The guest window takes the stats hook DURING the load; a Playwright page
-    // already had it seeded at document-start by the codec shim.
-    await page.goto(target.url, { waitUntil: 'domcontentloaded', inject: guest ? STATS_SOURCE : null })
+    await page.goto(target.url, { waitUntil: 'domcontentloaded' })
   } catch (error) {
     await fail(
       'entry',

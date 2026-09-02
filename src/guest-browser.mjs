@@ -82,12 +82,105 @@ export const ensureGuestBundle = async () => {
   return BUNDLE_PATH
 }
 
+// Window ids run past 2^30, and AppleScript turns a literal that big into a
+// real — "whose id is 1439954207" goes looking for 1.439954207E+9 and fails
+// with "Invalid index". Comparing as text sidesteps the conversion entirely.
+const onWindow = (windowId, body) =>
+  [
+    'set _w to missing value',
+    'repeat with _c in windows',
+    `  if ((id of _c) as text) is ${quote(String(windowId))} then set _w to _c`,
+    'end repeat',
+    'if _w is missing value then error "this Meet guest window is gone"',
+    'set _t to active tab of _w',
+    body,
+  ].join('\n')
+
 const windowIds = async () => {
   const out = await speak('return id of every window').catch(() => '')
   return out.split(',').map((value) => value.trim()).filter(Boolean)
 }
 
 let shared = null
+
+// Stream stats for a guest come from chrome://webrtc-internals, kept open in
+// one extra window of the shared browser. It sees every peer connection in the
+// process — including the ones Meet hides in module closures, which nothing
+// injected into the page can reach — and, unlike a page, Chrome's AppleScript
+// interface is allowed to read it. It polls getStats itself, once a second,
+// and renders the results into tables whose ids spell out what they hold:
+// <rid>-<lid>-table-<statId>-<field>.
+const INTERNALS = 'chrome://webrtc-internals/'
+
+// Every new window is found by diffing ids before and after "make new window",
+// so two of those in flight at once each take the other's window: a guest
+// ended up holding the stats window and navigated its own to nowhere. One at
+// a time, always.
+let creating = Promise.resolve()
+const createWindow = (work) => {
+  const turn = creating.then(work, work)
+  creating = turn.catch(() => {})
+  return turn
+}
+
+const newWindowId = async () => {
+  const before = new Set(await windowIds())
+  await speak('make new window')
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    const fresh = (await windowIds()).find((id) => !before.has(id))
+    if (fresh) return fresh
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error('the Call Bots browser did not open a window')
+}
+
+const ensureStatsWindow = async () => {
+  if (!shared) return null
+  // Memoised while in flight: two guests opening at once must not each build
+  // a stats window of their own.
+  shared.statsWindowPromise ??= createWindow(async () => {
+    const windowId = await newWindowId()
+    await speak(onWindow(windowId, `set URL of _t to ${quote(INTERNALS)}`))
+    if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] stats window', windowId)
+    return windowId
+  }).catch(() => null)
+  shared.statsWindow = await shared.statsWindowPromise
+  return shared.statsWindow
+}
+
+// One read of the whole page: which connection belongs to which page URL, and
+// the handful of fields the dashboard shows. Everything else on the page is
+// SDP and candidate grids the reader never touches.
+const INTERNALS_READ = [
+  '(function(){',
+  'var heads={};',
+  '[].slice.call(document.querySelectorAll(".tab-head")).forEach(function(e){',
+  '  var t=e.textContent.trim();var m=t.match(/rid: (\\d+), lid: (\\d+)/);',
+  '  if(m)heads[m[1]+"-"+m[2]]=t.split(" [")[0]});',
+  'var stats={};',
+  '[].slice.call(document.querySelectorAll("[id*=-table-]")).forEach(function(e){',
+  '  var m=e.id.match(/^(\\d+-\\d+)-table-([^-]+)-(\\w+)$/);if(!m)return;',
+  '  var f=m[3];if(!/^(type|kind|bytesSent|bytesReceived|currentRoundTripTime|packetsLost|jitter|state|nominated|mediaSourceId|trackIdentifier)$/.test(f))return;',
+  '  var k=m[1]+"|"+m[2];if(!stats[k])stats[k]={pc:m[1]};',
+  '  var v=e.textContent.trim();if(v.indexOf(f)===0)v=v.slice(f.length);',
+  '  stats[k][f]=v});',
+  'return JSON.stringify({heads:heads,stats:stats})',
+  '})()',
+].join('')
+
+const readInternals = async () => {
+  const windowId = await ensureStatsWindow()
+  if (!windowId) return null
+  const out = await speak(onWindow(windowId, `return execute _t javascript ${quote(INTERNALS_READ)}`)).catch(
+    () => '',
+  )
+  try {
+    return JSON.parse(out)
+  } catch {
+    return null
+  }
+}
 
 const startShared = async (media, options) => {
   const bundle = await ensureGuestBundle()
@@ -204,12 +297,16 @@ const killOnExit = () => {
 }
 
 export class GuestWindow {
-  constructor(windowId) {
+  constructor(windowId, tag) {
     this.windowId = windowId
+    // Rides in the URL fragment, which Meet ignores and webrtc-internals
+    // prints, so this window's connections can be told from the others'.
+    this.tag = tag
     this.closed = false
+    this.lastStats = new Map()
   }
 
-  static async open(media, options) {
+  static async open(media, options, { tag = 'guest' } = {}) {
     if (!shared) {
       killOnExit()
       starting ??= startShared(media, options).finally(() => {
@@ -218,41 +315,100 @@ export class GuestWindow {
       shared = await starting
     }
 
+    // The stats window goes first, so it is never in flight beside a guest's.
+    await ensureStatsWindow()
     // The first guest takes the window the browser opened with; the rest get
-    // one each, so every guest is its own Meet participant.
-    let windowId = shared.spare
+    // one each, so every guest is its own Meet participant. Normal windows,
+    // deliberately: the profile is a throwaway that is already signed out, and
+    // an incognito window would not inherit the camera and microphone grant
+    // seeded into it — leaving Meet nothing to offer but "Continue without
+    // microphone and camera".
+    const spare = shared.spare
     shared.spare = null
-    if (!windowId) {
-      const before = new Set(await windowIds())
-      // A normal window, deliberately. The profile is a throwaway that is
-      // already signed out, and an incognito window would not inherit the
-      // camera and microphone grant seeded into it — leaving Meet with nothing
-      // to offer but "Continue without microphone and camera".
-      await speak('make new window')
-      const deadline = Date.now() + 20_000
-      while (Date.now() < deadline && !windowId) {
-        windowId = (await windowIds()).find((id) => !before.has(id)) ?? null
-        if (!windowId) await new Promise((resolve) => setTimeout(resolve, 200))
-      }
-      if (!windowId) throw new Error('the Call Bots browser did not open a window for this guest')
+    const windowId = spare ?? (await createWindow(newWindowId))
+    if (process.env.CALL_BOTS_DEBUG_MEET) {
+      console.error('[guest-browser] window', windowId, 'for', tag, spare ? '(spare)' : '(new)')
     }
     shared.windows.add(windowId)
-    return new GuestWindow(windowId)
+    return new GuestWindow(windowId, tag)
   }
 
-  // Window ids run past 2^30, and AppleScript turns a literal that big into a
-  // real — "whose id is 1439954207" goes looking for 1.439954207E+9 and fails
-  // with "Invalid index". Comparing as text sidesteps the conversion entirely.
+  #tagged(url) {
+    return url.includes('#') ? url : `${url}#cb-${this.tag}`
+  }
+
+  // The same shape the stream monitor's summary takes, so the card needs no
+  // second code path. Rates are differenced against the previous read, over
+  // the real gap between them.
+  async rtcSummary() {
+    if (this.closed) return null
+    const page = await readInternals()
+    if (!page) return null
+    const marker = `#cb-${this.tag}`
+    const mine = new Set(
+      Object.entries(page.heads)
+        .filter(([, url]) => url.includes(marker))
+        .map(([pc]) => pc),
+    )
+    if (mine.size === 0) return null
+
+    const now = Date.now()
+    const seen = new Map()
+    const rate = (key, bytes) => {
+      const was = this.lastStats.get(key)
+      seen.set(key, { bytes, at: now })
+      return was && now > was.at ? ((bytes - was.bytes) * 8) / (now - was.at) : 0
+    }
+    const r1 = (value) => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null)
+
+    let up = 0
+    let upV = 0
+    let down = 0
+    let rtt = null
+    let jitter = null
+    // Distinct sources and tracks, not streams: Meet sends a camera as three
+    // simulcast layers, and three layers must not read as three cameras.
+    const out = { a: new Set(), v: new Set() }
+    const inbound = { a: new Set(), v: new Set() }
+
+    for (const [key, stat] of Object.entries(page.stats)) {
+      if (!mine.has(stat.pc)) continue
+      if (stat.type === 'outbound-rtp') {
+        const kbps = rate(key, Number(stat.bytesSent) || 0)
+        up += kbps
+        if (stat.kind === 'video') upV += kbps
+        if (kbps > 0) out[stat.kind === 'video' ? 'v' : 'a'].add(stat.mediaSourceId || key)
+      } else if (stat.type === 'inbound-rtp') {
+        const kbps = rate(key, Number(stat.bytesReceived) || 0)
+        down += kbps
+        if (kbps > 0) inbound[stat.kind === 'video' ? 'v' : 'a'].add(stat.trackIdentifier || key)
+        if (stat.kind === 'video' && jitter === null && stat.jitter) jitter = Number(stat.jitter) * 1000
+      } else if (
+        stat.type === 'candidate-pair' &&
+        stat.state === 'succeeded' &&
+        stat.currentRoundTripTime
+      ) {
+        rtt = Number(stat.currentRoundTripTime) * 1000
+      }
+    }
+    this.lastStats = seen
+    return {
+      pcs: mine.size,
+      via: false,
+      down: r1(down),
+      up: r1(up),
+      upV: r1(upV),
+      rtt: r1(rtt),
+      loss: null,
+      jit: r1(jitter),
+      in: { a: inbound.a.size, v: inbound.v.size },
+      out: { a: out.a.size, v: out.v.size },
+      limit: null,
+    }
+  }
+
   #on(body) {
-    return [
-      'set _w to missing value',
-      'repeat with _c in windows',
-      `  if ((id of _c) as text) is ${quote(this.windowId)} then set _w to _c`,
-      'end repeat',
-      'if _w is missing value then error "this Meet guest window is gone"',
-      'set _t to active tab of _w',
-      body,
-    ].join('\n')
+    return onWindow(this.windowId, body)
   }
 
   async url() {
@@ -264,19 +420,14 @@ export class GuestWindow {
   // take it. Meet grabs RTCPeerConnection into a module closure while its bundle
   // parses, so anything that arrives after the page has settled is too late to
   // see a single connection — the only chance is to get in during the load.
-  async goto(target, { inject = null } = {}) {
-    await speak(this.#on(`set URL of _t to ${quote(target)}`))
+  async goto(target) {
+    await speak(this.#on(`set URL of _t to ${quote(this.#tagged(target))}`))
     // `set URL` returns as soon as the navigation is asked for.
     const deadline = Date.now() + 45_000
-    let injected = false
     while (Date.now() < deadline) {
-      if (inject && !injected) {
-        const out = await this.evaluate(inject).catch(() => null)
-        if (out) injected = true
-      }
       const state = await this.evaluate('document.readyState').catch(() => null)
-      if (state === 'complete' || (state === 'interactive' && (!inject || injected))) return
-      await this.waitForTimeout(inject && !injected ? 30 : 250)
+      if (state === 'interactive' || state === 'complete') return
+      await this.waitForTimeout(250)
     }
   }
 

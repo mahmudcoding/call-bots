@@ -177,9 +177,19 @@ Clicking is plain `element.click()`.
 - **Visible windows**, N of them.
 - **An Automation prompt** the first time — the app asking to control the bot
   browser. Inherent: driving Chrome without a debugger *is* Apple Events.
-- **No Playwright page**, so no `page.screenshot` for card thumbnails and no
-  `addInitScript`. The RTC monitor can still go in — `installMonitor` only needs
-  an evaluate, which `execute javascript` can carry.
+- **No Playwright page**, so no `addInitScript`. The card thumbnail is a
+  `screencapture` of the window's on-screen rectangle (AppleScript gives its
+  bounds). Nothing injected into a Meet page can see its peer connections —
+  Meet takes `RTCPeerConnection` into a module closure while its bundle parses,
+  and an injection during the load still loses the race — and `--load-extension`
+  is dead in branded Chrome 152 (`chrome://extensions` stays empty, silently).
+  **Stream stats come from `chrome://webrtc-internals` instead**, kept open in
+  one extra window of the shared browser: it sees every connection in the
+  process, Chrome lets AppleScript run JavaScript on it, and it renders live
+  tables with ids `<rid>-<lid>-table-<statId>-<field>` (`bytesSent`, `kind`,
+  `currentRoundTripTime`, `mediaSourceId`…). Each guest's page URL carries
+  `#cb-<slug>`, which Meet ignores and the `.tab-head` prints, so a guest's
+  own connections can be told from the others'.
 
 Note `open -na "Google Chrome" --args ...` does **not** start a process — it
 adds a tab to the existing incognito window and drops the `--args`. Only
