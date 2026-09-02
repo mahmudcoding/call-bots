@@ -175,17 +175,20 @@ Clicking is plain `element.click()`.
   apiece. One incognito window per guest; Meet counts each as its own
   participant (three hand-opened windows joined one meeting as three guests).
 - **Visible windows**, N of them.
-- **Two Automation prompts** the first time — the app asking to control
-  *System Events* (used to check the bot browser is running without launching
-  it) and the *Call Bots browser* itself. Inherent: driving Chrome without a
-  debugger *is* Apple Events. The grants are per calling app: the terminal has
-  them, the packaged `Call Bots.app` gets its own, and a prompt that appears
-  while bots are already launching is answered late — measured as a guest that
-  never navigated plus two stray windows in the user's own Chrome. So the first
-  Apple Event is sent deliberately before any window exists, and a refusal is
-  reported as a permission problem, not as "browser not running". Check with:
-  `sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db "select client,
-  indirect_object_identifier, auth_value from access where
+- **Permission prompts the first time.** One Automation prompt — the app asking
+  to control the *Call Bots browser* — because driving Chrome without a debugger
+  *is* Apple Events. It is sent deliberately as the first event after the
+  browser comes up, before any guest window exists, with two minutes for a
+  person to answer it. And one Screen Recording prompt, for the card thumbnails
+  (a `screencapture` of the window). Grants are per calling app: the terminal
+  has them, the packaged `Call Bots.app` gets its own. **Never gate anything on
+  System Events**: an earlier build checked liveness through it, the packaged
+  app had no grant, macOS put up a dialog, and every Apple Event sat behind it
+  until its timeout — a guest was left on Meet's name screen, untouched, while
+  the same code ran clean from a shell. Liveness now comes from
+  `lsappinfo find bundleid=…`, which is LaunchServices' own answer and needs no
+  permission. Check grants with: `sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db
+  "select client, indirect_object_identifier, auth_value from access where
   service='kTCCServiceAppleEvents'"`.
 - **No Playwright page**, so no `addInitScript`. The card thumbnail is a
   `screencapture` of the window's on-screen rectangle (AppleScript gives its
