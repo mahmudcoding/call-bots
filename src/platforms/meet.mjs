@@ -101,6 +101,10 @@ const CONSENT_NAME = /^\s*(?:reject all|reject|decline all)\s*$/iu
 // the failure this app exists to make visible. Never click it — recognising it
 // is how a device fault gets reported as a device fault.
 const NO_DEVICES_NAME = /continue without (?:microphone|mic|camera)/iu
+// Its opposite, and the one to click. A guest window gets asked this outright
+// rather than inheriting a granted permission, and a bot that never answers is
+// left looking at the refusal the dialog is sitting on top of.
+const USE_DEVICES_NAME = /use (?:microphone and camera|camera and microphone)/iu
 
 const REFUSALS = [
   /You can'?t join this (?:video )?call/iu,
@@ -140,12 +144,11 @@ const parse = (url) => {
       `expected a Meet link like meet.google.com/abc-defg-hij, got ${url.pathname || '/'}`,
     )
   }
-  // hl pins the URL language and authuser pins the account: a profile has one
-  // signed-in account, so a link copied from someone else's second account must
-  // not send this bot looking for an account it does not have.
+  // hl pins the URL language. No authuser: a guest has no account for it to
+  // select, and a profile has exactly one, so it can only ever be wrong.
   return {
     origin: url.origin,
-    url: `${url.origin}/${slug}?hl=en&authuser=0`,
+    url: `${url.origin}/${slug}?hl=en`,
     callId: CODE_RE.test(code) ? code : (alias?.[1] ?? slug),
   }
 }
@@ -223,6 +226,7 @@ const readPage = (page, { withText = false } = {}) =>
         joinButton: has(text.join),
         askToJoin: has(text.ask),
         dismissible: has(text.dismiss),
+        useDevices: has(text.useDevices),
         consent: has(text.consent),
         noDevices: has(text.noDevices),
         presenting: allVisible(sel.stopPresent).length > 0,
@@ -239,6 +243,7 @@ const readPage = (page, { withText = false } = {}) =>
         dismiss: DISMISS_NAME.source,
         consent: CONSENT_NAME.source,
         noDevices: NO_DEVICES_NAME.source,
+        useDevices: USE_DEVICES_NAME.source,
       },
     },
   )
@@ -293,6 +298,11 @@ const classify = (read, url, guest) => {
     }
   }
   if (SIGNED_OUT.test(plain(read.headline))) return { stage: 'signin' }
+
+  // Before the refusal check: Meet draws this dialog OVER whatever is
+  // underneath, so the page can read as refused while the only thing actually
+  // wrong is that nobody answered the question.
+  if (read.useDevices) return { stage: 'devices-ask' }
 
   const refusal = refusalIn(read.headline)
   if (refusal) return { stage: 'refused', detail: refusal }
@@ -492,6 +502,9 @@ const join = async (ctx) => {
       continue
     }
     const { stage, detail } = classify(read, page.url(), guest)
+    if (process.env.CALL_BOTS_DEBUG_MEET) {
+      console.error('[meet]', stage, JSON.stringify({ ...read, headline: read.headline.slice(0, 90) }))
+    }
 
     if (stage === 'in-call') {
       setWaitingAdmission?.(false)
@@ -509,6 +522,12 @@ const join = async (ctx) => {
       // there is no session here to have expired.
       if (guest) await fail('entry', REFUSED_GUEST)
       await failSignedOut(ctx)
+    }
+
+    if (stage === 'devices-ask') {
+      await tryClick(byName(page, USE_DEVICES_NAME), 5_000)
+      await page.waitForTimeout(POLL_FAST)
+      continue
     }
 
     if (stage === 'name-entry') {

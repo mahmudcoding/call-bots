@@ -260,8 +260,10 @@ check('recognises a nicknamed Meet link',
   JSON.stringify(aliasTarget))
 const scoped = resolveLink('https://meet.google.com/u/0/abc-defg-hij')
 check('follows an account-scoped Meet link', scoped.callId === 'abc-defg-hij', JSON.stringify(scoped))
-check('pins the language and the account in the URL it opens',
-  /[?&]hl=en/u.test(scoped.url) && /[?&]authuser=0/u.test(scoped.url), scoped.url)
+// No authuser: a guest has no account for it to select, and a profile has
+// exactly one, so naming an account index can only ever be wrong.
+check('pins the language and names no account in the URL it opens',
+  /[?&]hl=en/u.test(scoped.url) && !/authuser/u.test(scoped.url), scoped.url)
 
 await drive(browser, {
   title: 'Google Meet — direct entry',
