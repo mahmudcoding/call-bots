@@ -69,6 +69,14 @@ from it whatever the preference says), and **`--label`** (a Meet bot is named by
 its Google account). The controls are hidden rather than left to fail, and the
 checks behind them are in `src/platforms/meet.mjs`.
 
+**"Call Bots was prevented from modifying apps on your Mac."** Dismiss it — Call
+Bots never modifies an app, and nothing here needs that permission. It is Google
+Chrome finishing its own update: macOS blames whichever app launched Chrome, and
+for Meet that has to be this one, because the saved sign-in belongs to real
+Chrome and not to the bundled Chromium. To stop it recurring, open Chrome by
+itself once and let the update finish, or grant **App Management** to
+*GoogleUpdater* — not to Call Bots.
+
 **Meet must be in English.** Meet renders in the signed-in account's own Google
 language, which overrides the language in the link, and the adapter reads
 Meet's English controls. An account set to another language is reported as such

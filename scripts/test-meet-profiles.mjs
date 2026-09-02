@@ -8,12 +8,13 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { MeetProfileStore, inspectMeetProfile } from '../src/meet-profiles.mjs'
+import { MeetProfileStore, chromeHoldsProfile, inspectMeetProfile } from '../src/meet-profiles.mjs'
 import { Guest } from '../src/guest.mjs'
 import { meetAccountLabels } from '../src/orchestrator.mjs'
 
@@ -156,6 +157,58 @@ try {
   numbers.remove(numbers.list()[0].id)
   check('and keeps that number after the one above it is removed',
     numbers.list()[0].number === kept + 1, JSON.stringify(numbers.list()))
+
+  console.log('\na Chrome window somebody left open')
+  // The bug this covers: the sign-in window is detached so it outlives the app,
+  // but the record of it was only ever in memory. After a restart the store
+  // handed a bot a profile that Chrome still held, and Playwright answered with
+  // a screenful of ProcessSingleton.
+  {
+    const held = new Set()
+    const root = mkdtempSync(join(tmpdir(), 'call-bots-meet-held-'))
+    const locks = new MeetProfileStore({
+      root,
+      chromePath: () => '/chrome',
+      spawnProcess: fakeSpawn,
+      inspect: () => ({ signedIn: true, displayName: 'Lock Tester' }),
+      heldByChrome: (dir) => held.has(dir),
+    })
+    const one = locks.setup()
+    launches.at(-1).child.emit('exit', 0)
+    check('an account nobody has open is ready', locks.list()[0].status === 'ready')
+
+    // Same store, no restart needed to prove it: the setups map is empty and
+    // only the lock on disk says the window is there.
+    held.add(join(root, one.id))
+    check('an account whose Chrome window is still open is not ready',
+      locks.list()[0].status === 'signed-in', JSON.stringify(locks.list()))
+    check('and is not counted towards capacity', locks.summary().available === 0)
+    check('so a bot is never handed it',
+      throws(() => locks.reserveMany(1), /0 ready/u))
+    check('removing it says which window to close',
+      throws(() => locks.remove(one.id), /close its Google Chrome window/u))
+
+    held.delete(join(root, one.id))
+    check('closing that window hands it back', locks.list()[0].status === 'ready')
+    rmSync(root, { recursive: true, force: true })
+  }
+
+  // The trap in reading that lock: it is a symlink to <hostname>-<pid>, which
+  // is not a real path, so existsSync() follows it, finds nothing and reports
+  // no lock at all.
+  {
+    const root = mkdtempSync(join(tmpdir(), 'call-bots-meet-lock-'))
+    check('a directory with no lock reads as free', chromeHoldsProfile(root) === false)
+    symlinkSync(`somehost-${process.pid}`, join(root, 'SingletonLock'))
+    check('a lock naming a live process reads as held', chromeHoldsProfile(root) === true)
+    rmSync(join(root, 'SingletonLock'))
+    // A pid no longer running is a lock Chrome left behind when it died; it
+    // clears that itself next start, and treating it as held would strand the
+    // account forever.
+    symlinkSync('somehost-2147480000', join(root, 'SingletonLock'))
+    check('a lock naming a dead process is ignored', chromeHoldsProfile(root) === false)
+    rmSync(root, { recursive: true, force: true })
+  }
 
   console.log('\nsign-in detection and session checks')
   // Chrome on macOS outlives its last window, so a store that waits for the

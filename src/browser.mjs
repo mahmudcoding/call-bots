@@ -218,8 +218,18 @@ export const launchGuest = async (guest, media, options, codecs = null, meetProf
     if (context) await context.close().catch(() => {})
     if (browser) await browser.close().catch(() => {})
     if (meetProfile) {
-      // Playwright launch errors include the full Chrome command line. Replace
-      // the private user-data path before the error reaches a bot log or API.
+      // Chrome refuses to open a profile a second Chrome already has. The raw
+      // form of this is a screenful of Playwright's launch command line, and
+      // the one thing the user has to do is not in it.
+      if (/ProcessSingleton|SingletonLock/iu.test(error.message)) {
+        throw new Error(
+          `${meetProfile.displayName} is already open in a Chrome window — ` +
+            'close that window, then send the bots again',
+        )
+      }
+      // Otherwise: Playwright launch errors include the full Chrome command
+      // line. Replace the private user-data path before the error reaches a
+      // bot log or the API.
       const safe = String(error.message).split(meetProfile.userDataDir).join('[private Meet profile]')
       throw new Error(safe)
     }

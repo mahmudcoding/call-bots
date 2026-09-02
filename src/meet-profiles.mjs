@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -79,12 +80,42 @@ const normalizeRecords = (value) => {
     }))
 }
 
+// Chrome guards a user-data-dir with a SingletonLock symlink pointing at
+// <hostname>-<pid>, and refuses to start a second browser on a directory that
+// already has one. That lock is the only thing that knows a profile is open,
+// and unlike an in-memory record it survives the app restarting — which is
+// exactly how a bot came to be handed a profile that a sign-in window was
+// still holding, and got a wall of Playwright text for its trouble.
+//
+// The target is not a real path, so existsSync() follows the link, finds
+// nothing, and reports no lock. It has to be read as a link.
+export const chromeHoldsProfile = (userDataDir) => {
+  let target
+  try {
+    target = readlinkSync(join(userDataDir, 'SingletonLock'))
+  } catch {
+    // No lock, or a platform that does not use one.
+    return false
+  }
+  const pid = Number(String(target).split('-').pop())
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // ESRCH is a lock Chrome left behind when it died; it clears that itself
+    // on the next start. EPERM means the process is alive under another user.
+    return error.code === 'EPERM'
+  }
+}
+
 export class MeetProfileStore {
   constructor({
     root = join(baseDir, 'meet-profiles'),
     chromePath = googleChromePath,
     spawnProcess = spawn,
     inspect = inspectMeetProfile,
+    heldByChrome = chromeHoldsProfile,
     // Sign-in finishing is the one thing the dashboard cannot poll for itself,
     // so the store announces it instead.
     onChange = null,
@@ -94,6 +125,7 @@ export class MeetProfileStore {
     this.chromePath = chromePath
     this.spawnProcess = spawnProcess
     this.inspect = inspect
+    this.heldByChrome = heldByChrome
     this.onChange = onChange
     this.reservations = new Map()
     this.setups = new Map()
@@ -126,18 +158,33 @@ export class MeetProfileStore {
     return path
   }
 
+  // Is some other Chrome sitting on this profile? The setup we launched is the
+  // fast answer; the lock on disk is the true one, and it is what catches a
+  // sign-in window that outlived the app that opened it.
+  #openElsewhere(profile) {
+    if (this.setups.has(profile.id)) return true
+    try {
+      return this.heldByChrome(this.#profileDir(profile.id))
+    } catch {
+      return false
+    }
+  }
+
   #public(profile) {
+    // Reservation first: a bot's own Chrome holds the lock too, and that is
+    // "in use", not "somebody left a window open".
+    //
     // "signed-in" is its own state on purpose. The sign-in has landed and the
-    // dashboard should say so immediately — but real Chrome still holds this
+    // dashboard should say so immediately — but Chrome still holds this
     // profile's lock, so a bot reopening it would fail. Telling the truth about
     // both is better than showing "setting up" over a finished sign-in or
     // "ready" over a profile nothing can open.
-    const status = this.setups.has(profile.id)
-      ? profile.ready
-        ? 'signed-in'
-        : 'setting-up'
-      : this.reservations.has(profile.id)
-        ? 'in-use'
+    const status = this.reservations.has(profile.id)
+      ? 'in-use'
+      : this.#openElsewhere(profile)
+        ? profile.ready
+          ? 'signed-in'
+          : 'setting-up'
         : profile.ready
           ? 'ready'
           : 'needs-sign-in'
@@ -189,7 +236,7 @@ export class MeetProfileStore {
     const profiles = this.records
       .filter(
         (profile) =>
-          profile.ready && !this.reservations.has(profile.id) && !this.setups.has(profile.id),
+          profile.ready && !this.reservations.has(profile.id) && !this.#openElsewhere(profile),
       )
       .slice(0, count)
 
@@ -242,7 +289,7 @@ export class MeetProfileStore {
     if (this.reservations.has(profile.id)) {
       throw new Error('that Google account is in use by a bot')
     }
-    if (this.setups.has(profile.id)) return this.#public(profile)
+    if (this.#openElsewhere(profile)) return this.#public(profile)
 
     const userDataDir = this.#profileDir(profile.id)
     mkdirSync(userDataDir, { recursive: true, mode: 0o700 })
@@ -352,7 +399,9 @@ export class MeetProfileStore {
   async verify(id, { launch = null } = {}) {
     const profile = this.#record(id)
     if (this.reservations.has(id)) throw new Error('that Google account is in use by a bot')
-    if (this.setups.has(id)) throw new Error('that Google account is still being set up')
+    if (this.#openElsewhere(profile)) {
+      throw new Error('close that Google account\'s Chrome window before checking it')
+    }
 
     const onDisk = this.inspect(this.#profileDir(id))
     if (!onDisk.signedIn) {
@@ -375,8 +424,8 @@ export class MeetProfileStore {
   remove(id) {
     const profile = this.#record(id)
     if (this.reservations.has(id)) throw new Error('that Google account is in use by a bot')
-    if (this.setups.has(id)) {
-      throw new Error('close its Google Chrome setup window before removing it')
+    if (this.#openElsewhere(profile)) {
+      throw new Error('close its Google Chrome window before removing it')
     }
     const profileDir = this.#profileDir(id)
     rmSync(profileDir, { recursive: true, force: true })
