@@ -152,7 +152,7 @@ export const launchGuest = async (guest, media, options, codecs = null) => {
       // Chrome's AppleScript interface. Imported here rather than at the top
       // because that module needs this one's Chrome paths.
       const { GuestWindow } = await import('./guest-browser.mjs')
-      const window = await GuestWindow.open(media, options, { tag: guest.slug })
+      const window = await GuestWindow.open(media, options, { tag: guest.slug, label: guest.label })
       return { browser: null, context: null, page: window, close: () => window.close() }
     }
     const primary = resolveChannel(options.browser)

@@ -51,8 +51,9 @@ Meet bots are guests and need no Google account: each bot opens a real Chrome
 window, types its name and joins — or waits for you to admit it, exactly as an
 Aloqa guest does. Terminal: that is what `join` already does. Guests get the
 same card as every other bot: a live thumbnail of what they publish, the stream
-monitor with per-stream codec, resolution and bitrate, and the dark-camera
-watchdog.
+monitor with per-stream codec, resolution and bitrate — each stream named after
+the participant it belongs to, with Meet's audio marked "(likely)" because Meet
+only pairs it by position — and the dark-camera watchdog.
 
 What a guest needs, all on the Mac running Call Bots:
 

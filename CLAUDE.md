@@ -306,6 +306,18 @@ Each is still true; none is worth an evening again.
   guests' Chrome is started with `--lang=en-US`; the adapter reads English
   control labels. (A signed-in account's own language setting overrode even
   that, back when accounts were a way in.)
+- **Stream rows can be named without touching a peer connection.** A remote
+  participant's tile (`[data-participant-id]`) holds a `<video>` whose
+  `srcObject` track id is exactly the `trackIdentifier` webrtc-internals
+  prints for that inbound stream, and the participant's name is a leaf text
+  inside the tile (measured: "Tester 2", "Mahmud Nosirov"). The self tile
+  says "Others might still see your full video." and carries the own-video
+  controls. Remote audio plays through detached `<audio>` elements with no
+  tile, but Meet's audio and video media sections come in matching rank
+  order, so equal-sized slot sets pair by numeric mid and the audio takes the
+  video's name marked "(likely)" — the same approximation, with the same
+  fail-closed guards, as the RTC stream monitor extension makes. Outgoing rows
+  take the bot's own label.
 - **Address windows by id, never by position.** `repeat with _c in windows`
   hands back `item i of windows`, a reference by position, and Chrome orders
   `windows` front-to-back — a window made or raised between the lookup and

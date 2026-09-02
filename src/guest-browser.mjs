@@ -315,6 +315,31 @@ const GRAB_VIDEO = [
   '})()',
 ].join('')
 
+// Who is behind each track the page is playing, read from the tiles. A remote
+// participant's <video> carries the receiver track, whose id is exactly the
+// `trackIdentifier` webrtc-internals prints for that inbound stream, and the
+// participant's name is a leaf text inside the same tile (`data-participant-id`)
+// — measured on a live call, and the same match the RTC stream monitor
+// extension makes on Meet. The self tile is told by its own-video controls.
+// Names are cleaned the way the extension cleans them: no timers, no
+// Material icon ligatures, no control labels, nothing over forty characters.
+const TILE_NAMES = [
+  '(function(){',
+  'var JUNK=/^(video|audio|camera|microphone|mic|screen|presentation|participant|remote|local|you|muted|unmuted|off|on|pinned|speaker)$/i;',
+  'var WORD=/^(your|my|own|self|local|remote|the|a|an|is|video|audio|camera|microphone|mic|screen|share|shared|sharing|view|feed|stream|preview|presentation|participant|placeholder|avatar|thumbnail|tile|muted|unmuted|off|on|pinned|speaker|you|excellent|good|fair|poor|weak|strong|unstable|connection|quality|signal|network|status|reconnecting|connecting|connected|disconnected|speaking|raised|hand|reaction|guest|host|owner|admin|moderator|others|might|still|see|full)$/i;',
+  'var allJunk=function(t){var p=t.split(/[\\s\\-_,./]+/).filter(Boolean);if(!p.length||p.length>4)return false;for(var i=0;i<p.length;i++)if(!WORD.test(p[i]))return false;return true};',
+  'var clean=function(t){if(!t)return null;t=String(t).replace(/\\s+/g," ").trim();if(!t||t.length>90)return null;if(/^[\\d\\s:.%]+$/.test(t))return null;if(/^[a-z0-9]+(_[a-z0-9]+)+$/.test(t))return null;',
+  '  if(t.length>40||JUNK.test(t)||allJunk(t))return null;t=t.replace(/[,;]\\s*(muted|unmuted|camera (on|off)|video (on|off)|presenting|speaking|pinned|guest|host)\\b.*$/i,"").replace(/\\s*\\((presenting|speaking|pinned|screen share)\\)\\s*$/i,"").replace(/([a-z0-9])(guest|host|owner|admin|moderator|speaker|presenter)$/i,"$1").trim();',
+  '  return(t&&t.length<=40&&!JUNK.test(t)&&!allJunk(t))?t:null};',
+  'var CTRL="button,[role=button],[role=menuitem],[role=tab],[role=img],[role=status],[role=tooltip],[aria-hidden=true]";',
+  'var nameOf=function(tile){var counts={},order=[],kids=tile.querySelectorAll("*");for(var i=0;i<kids.length&&i<120;i++){var k=kids[i];if(k.children&&k.children.length)continue;try{if(k.closest(CTRL))continue}catch(e){}var v=clean(k.textContent);if(!v)continue;if(!counts[v]){counts[v]=0;order.push(v)}counts[v]++}',
+  '  for(var j=0;j<order.length;j++)if(counts[order[j]]>1)return order[j];return order.length===1?order[0]:(order.length?order[order.length-1]:null)};',
+  'var out={};[].slice.call(document.querySelectorAll("[data-participant-id]")).forEach(function(tile){if(tile.parentElement&&tile.parentElement.closest("[data-participant-id]"))return;',
+  '  var local=!!tile.querySelector("[aria-label*=Reframe i],[aria-label*=Backgrounds i],[aria-label*=effects i]");var name=nameOf(tile);',
+  '  [].slice.call(tile.querySelectorAll("video")).forEach(function(v){try{(v.srcObject?v.srcObject.getTracks():[]).forEach(function(t){out[t.id]={name:name,local:local}})}catch(e){}})});',
+  'return JSON.stringify(out)})()',
+].join('')
+
 // One read of the whole page: which connection belongs to which page URL, and
 // the handful of fields the dashboard shows. Everything else on the page is
 // SDP and candidate grids the reader never touches.
@@ -531,9 +556,15 @@ const FIRST_SAMPLE_MS = 2500
 const RATE_WINDOW_MS = 6000
 
 export class GuestWindow {
-  constructor(proc, windowId, tag) {
+  constructor(proc, windowId, tag, label = null) {
     this.proc = proc
     this.windowId = windowId
+    this.label = label
+    // Names proved for tracks, kept until the track leaves the stats: a tile
+    // that the grid unmounts for a moment must not turn its row back into
+    // "Video · 1234" and back.
+    this.names = new Map()
+    this.namesAt = 0
     // Rides in the URL fragment, which Meet ignores and webrtc-internals
     // prints, so this window's connections can be told from any other's.
     this.tag = tag
@@ -547,7 +578,7 @@ export class GuestWindow {
     this.inFlight = { summary: null, snapshot: null }
   }
 
-  static async open(media, options, { tag = 'guest' } = {}) {
+  static async open(media, options, { tag = 'guest', label = null } = {}) {
     if (process.platform !== 'darwin') {
       throw new Error('Meet guests need macOS — on this machine, send Meet bots as Google accounts')
     }
@@ -565,7 +596,20 @@ export class GuestWindow {
       console.error('[guest-browser] pid', proc.child.pid, 'window', windowId, 'for', tag)
     }
     await placeWindow(proc, windowId, slots++)
-    return new GuestWindow(proc, windowId, tag)
+    return new GuestWindow(proc, windowId, tag, label)
+  }
+
+  // Refresh the track → name map from the tiles, at most every few seconds,
+  // or sooner when a stream the panel shows has no name yet.
+  async #refreshNames(inboundTracks) {
+    const unnamed = inboundTracks.some((track) => track && !this.names.has(track))
+    if (!unnamed && Date.now() - this.namesAt < 5000) return
+    this.namesAt = Date.now()
+    const read = await this.evaluate(TILE_NAMES).catch(() => null)
+    if (!read || typeof read !== 'object') return
+    for (const [track, who] of Object.entries(read)) {
+      if (who?.name && !who.local) this.names.set(track, who.name)
+    }
   }
 
   #tagged(url) {
@@ -719,7 +763,7 @@ export class GuestWindow {
         const got = num(stat.packetsReceived) ?? 0
         if (stat.kind === 'video' && jitter === null && stat.jitter) jitter = num(stat.jitter) * 1000
         inbound.push({
-          id, kind: stat.kind ?? null, dir: 'in', ssrc: num(stat.ssrc), mid: stat.mid ?? null,
+          id, pc: stat.pc, kind: stat.kind ?? null, dir: 'in', ssrc: num(stat.ssrc), mid: stat.mid ?? null,
           track: stat.trackIdentifier ?? null, name: null, kbps,
           w: num(stat.frameWidth), h: num(stat.frameHeight), fps: num(stat.framesPerSecond),
           codec: codecOf(stat), bytes: num(stat.bytesReceived),
@@ -739,6 +783,33 @@ export class GuestWindow {
       } else if (stat.type === 'transport' && stat.dtlsState) {
         dtls = stat.dtlsState
       }
+    }
+    await this.#refreshNames(inbound.map((s) => s.track))
+    for (const track of [...this.names.keys()]) {
+      if (!inbound.some((s) => s.track === track)) this.names.delete(track)
+    }
+    for (const s of outbound) s.name = this.label
+    for (const s of inbound) s.name = this.names.get(s.track) ?? null
+    // Meet plays remote audio through detached elements with no tile to read
+    // a name from. Its audio and video media sections come in matching rank
+    // order, so when one connection holds equally many audio slots and exactly
+    // named video slots, the pairing by rank names the audio — marked as the
+    // approximation it is, and refused when anything about it is ambiguous.
+    const byPc = new Map()
+    for (const s of inbound) {
+      if (!byPc.has(s.pc)) byPc.set(s.pc, { audio: [], video: [] })
+      byPc.get(s.pc)[s.kind === 'audio' ? 'audio' : 'video'].push(s)
+    }
+    for (const { audio, video } of byPc.values()) {
+      const numeric = (s) => (/^\d+$/u.test(String(s.mid ?? '')) ? Number(s.mid) : null)
+      const audioSlots = audio.filter((s) => !s.name && s.track && numeric(s) !== null).sort((a, b) => numeric(a) - numeric(b))
+      const videoSlots = video.filter((s) => s.name && s.track && numeric(s) !== null).sort((a, b) => numeric(a) - numeric(b))
+      const names = new Set(videoSlots.map((s) => s.name))
+      if (audioSlots.length === 0 || audioSlots.length !== video.length || videoSlots.length !== video.length) continue
+      if (names.size !== videoSlots.length) continue
+      audioSlots.forEach((s, index) => {
+        s.name = `${videoSlots[index].name} (likely)`
+      })
     }
     const lossValues = inbound.map((s) => s.lossPct).filter((v) => v !== null)
     if (lossValues.length > 0) loss = r1(Math.max(...lossValues))
