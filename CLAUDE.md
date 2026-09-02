@@ -106,43 +106,84 @@ Requirements and consequences:
   toolbar read `Выключить микрофон` / `Участники1` / `Показать экран`, and the
   leave button was `Выйти из звонка`, not `Leave call`.
 
-### The two constraints that shape the driver
+### The working recipe, verified end to end
 
-Both measured, both non-obvious:
+Meet showed `inputs: ["Your name"]` — the guest name field — through every step
+below, with no debugger anywhere near it.
 
-1. **Apple Events reach only one Chrome process.** Launch a second Chrome with
-   its own `--user-data-dir` and `tell application "Google Chrome"` starts
-   answering for exactly one of them — the other becomes invisible to scripting.
-   Which one wins is not stable: right after launching the bot Chrome the events
-   went to it, and minutes later they went back to the user's. So a guest driver
-   cannot just spawn its own Chrome and expect to script it.
+**1. A separate Chrome application bundle.** Apple Events reach only ONE process
+per bundle id: start a second Chrome and `tell application "Google Chrome"`
+answers for exactly one of them, and which one is not stable. A copy with its
+own identity is addressed unambiguously and never collides with the user's
+browser.
 
-   The deterministic fix is a **separate application bundle**: copy `Chrome.app`
-   and give the copy its own `CFBundleIdentifier` and `CFBundleName`, then
-   address that name from AppleScript. It never collides with the user's Chrome.
-   A ~300 MB one-time copy, cached in the app's data directory.
+```bash
+ditto "/Applications/Google Chrome.app" "$BUNDLE"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.aloqa.call-bots.browser" "$BUNDLE/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName CallBotsBrowser" "$BUNDLE/Contents/Info.plist"
+xattr -cr "$BUNDLE"          # or codesign fails: "resource fork ... not allowed"
+codesign --force --sign - "$BUNDLE"
+```
 
-2. **One process means one set of fake-capture flags.** `--use-file-for-fake-*`
-   is process-wide, so every guest sharing a Chrome shares a camera clip and a
-   voice. Aloqa bots and Meet account bots still get one apiece — only guests
-   are alike. The alternative is an in-page `getUserMedia` override, which needs
-   document-start injection that AppleScript cannot do.
+~300 MB, one time, cached. Then address it as
+`tell application id "com.aloqa.call-bots.browser"`.
 
-Note that `open -na "Google Chrome" --args --incognito <url>` does **not** start
-a process — it adds a tab to the existing incognito window, and the `--args` are
-ignored. Only spawning the binary directly makes a new process.
+**2. Seed the profile before first launch**, or `execute javascript` refuses
+with *"Executing JavaScript through AppleScript is turned off"*. It is a
+per-profile preference and there is no command-line flag for it:
 
-Separate incognito windows in one process all share one incognito profile, and
-Meet still counts each as its own guest — three hand-opened windows joined one
-meeting as three separate participants.
+```bash
+mkdir -p "$DIR/Default"
+echo '{"browser":{"allow_javascript_apple_events":true}}' > "$DIR/Default/Preferences"
+```
 
-### Where this is up to
+**3. Launch it.** `--use-mock-keychain --password-store=basic` are not optional:
+without them macOS asks for the login password to let this re-signed copy read
+the real Chrome's "Chrome Safe Storage" keychain item. A throwaway incognito
+profile has no use for it, and granting it would hand a re-signed Chrome copy
+the real one's cookie key.
 
-`src/browser.mjs` currently launches guests with `--remote-debugging-port` and
-`connectOverCDP`, which is the thing that gets refused. That needs replacing
-with the AppleScript driver above. Everything else about the guest path —
-mode plumbing, the guest/account switch, the `--as` flag, the refusal messages —
-is already in place and tested.
+```
+--user-data-dir=<temp>  --incognito  --lang=en-US
+--no-first-run  --no-default-browser-check
+--use-mock-keychain  --password-store=basic
+--use-fake-device-for-media-stream
+--use-file-for-fake-video-capture=<clip>  --use-file-for-fake-audio-capture=<voice>
+```
+
+**No `--remote-debugging-port`.** That is the whole point.
+
+**4. Drive it with single-line JavaScript.** AppleScript string literals cannot
+span lines, and a multi-line script comes back as `missing value` rather than an
+error, which is a confusing half hour if you have not seen it before.
+
+Filling Meet's name field needs the React-safe form, not `input.value =`:
+
+```js
+var set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+set.call(input, name); input.dispatchEvent(new Event('input', { bubbles: true }))
+```
+
+Clicking is plain `element.click()`.
+
+### What this costs
+
+- **macOS only.** Guests cannot work this way on Linux.
+- **One Chrome process for all guests**, because of the Apple Events limit — and
+  `--use-file-for-fake-*` is process-wide, so every guest in a run shares one
+  camera clip and one voice. Aloqa bots and Meet account bots still get one
+  apiece. One incognito window per guest; Meet counts each as its own
+  participant (three hand-opened windows joined one meeting as three guests).
+- **Visible windows**, N of them.
+- **An Automation prompt** the first time — the app asking to control the bot
+  browser. Inherent: driving Chrome without a debugger *is* Apple Events.
+- **No Playwright page**, so no `page.screenshot` for card thumbnails and no
+  `addInitScript`. The RTC monitor can still go in — `installMonitor` only needs
+  an evaluate, which `execute javascript` can carry.
+
+Note `open -na "Google Chrome" --args ...` does **not** start a process — it
+adds a tab to the existing incognito window and drops the `--args`. Only
+spawning the binary directly makes a new process.
 
 ## Other Meet facts worth not rediscovering
 
