@@ -9,3 +9,4 @@ provision.env
 .DS_Store
 .server/
 .claude/
+native/

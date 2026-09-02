@@ -66,16 +66,16 @@ What a guest needs, all on the Mac running Call Bots:
   opens.
 - **macOS.** On Linux, Meet bots are Google accounts only.
 
-All guests in one run share a camera clip and a voice — they live in one Chrome
-process, and the fake-capture flags are process-wide. Account bots and Aloqa
-bots still get one each. (Giving each guest its own was tried every way there
-is, and Meet defeats all of them; the details are in CLAUDE.md.)
+Every guest is its own Chrome process with its own camera clip and voice — the
+five cycle through the bots exactly as they do for Aloqa. (Chrome's fake
+devices are per process, and addressing one process among several took a
+small compiled helper that ships inside the app; CLAUDE.md has the story.)
 
-Plan on **about three guests per 8-core Mac**: each is a full Chrome window
-encoding and decoding video, and past that point the machine stops keeping up
-with any of them. Call Bots warns when a send goes past what the machine can
-carry. Guest windows are small and tiled on purpose — Meet sends them video
-sized to the tiles they draw, which is most of the headroom.
+Plan on **about three guests per 8-core Mac**: each is a full Chrome process
+encoding and decoding video. Four ran fine on a 16 GB M3, and Call Bots warns
+when a send goes past what the machine can carry. Guest windows are small and
+tiled on purpose — Meet sends them video sized to the tiles they draw, which
+is most of the headroom.
 
 ## Google Meet accounts
 

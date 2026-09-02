@@ -169,13 +169,27 @@ Clicking is plain `element.click()`.
 ### What this costs
 
 - **macOS only.** Guests cannot work this way on Linux.
-- **One Chrome process for all guests**, because of the Apple Events limit — and
-  `--use-file-for-fake-*` is process-wide, so every guest in a run shares one
-  camera clip and one voice. Aloqa bots and Meet account bots still get one
-  apiece. One window per guest; Meet counts each as its own participant (three
-  hand-opened windows joined one meeting as three guests). Every way around
-  this was tried on 2026-09-03 and failed; see "Why a guest cannot have its own
-  camera" below before trying again.
+- **One Chrome process per guest, addressed by pid through a compiled
+  helper.** `--use-file-for-fake-*` is process-wide, so a process each is what
+  gives every guest its own clip and voice, cycling through the five as Aloqa
+  bots do. No script layer can address a process: `tell application id`
+  reaches one process per bundle id, and JavaScript for Automation's
+  `Application(pid)` was measured answering from the first process whatever
+  pid it was given. The Apple Event Manager itself has no such trouble, so
+  `scripts/macos-app/aesend.swift` builds the target descriptor from the pid
+  and sends the dozen events the driver needs (`count`, `window-id`,
+  `new-window`, `url`, `set-url`, `exec` with the JavaScript on stdin,
+  `minimize`, `bounds`, `get-bounds`, `close`, `quit`). Measured: twelve
+  concurrent calls to two processes, every answer from the right one. The app
+  build compiles it to `<projectRoot>/native/aesend`; a source checkout
+  compiles it with `swiftc` into the data directory on first use. Chrome's
+  window ids are *text* in its dictionary — a unique-id form carrying an
+  integer is "no such object" (-1728). Errors keep their Apple Event numbers:
+  -1743 is the Automation grant, -600 no such process. The grant is per target
+  bundle, so more processes of the same bundle cost no new prompts. Each
+  process is ~200 MB more than a window would have been; four guests measured
+  at a load average of 10 on the 8-core M3 (the shared-process design had
+  four at 48, before the small windows and the 720p clip).
 - **About three guests on an 8-core M3 with 16 GB.** Each is a Chrome window
   encoding AV1 and decoding everyone else. Three sat at a load average of 9;
   a fourth took it to 48, Apple Events took seconds each, every probe timed
@@ -222,22 +236,18 @@ Note `open -na "Google Chrome" --args ...` does **not** start a process — it
 adds a tab to the existing incognito window and drops the `--args`. Only
 spawning the binary directly makes a new process.
 
-### Why a guest cannot have its own camera (measured 2026-09-03)
+### The ways to a guest's own camera that do not work (measured 2026-09-03)
 
-Account bots each run their own Chrome, so the five clips and five voices
-cycle through them as they do through Aloqa bots. Guests share one process
-and one fake device. Four ways to give each guest its own were measured
-against the live meeting; none works, and each took an evening's hour.
+Before the helper, four other routes were measured against the live meeting.
+Each is still true; none is worth an evening again.
 
-- **One process per guest, addressed by pid.** JavaScript for Automation
-  accepts `Application(<pid>)`, and with two processes of the bots' bundle
-  it answered *both* pids from the same process — sequentially, concurrently,
-  and by window id, every call landed in the first process launched. Both
-  processes number their windows identically (`windows[0].id()` was the same
-  in each), so a misrouted event even finds a matching window: bot-1's mute
-  muted bot-2, bot-2 never had stats. Apple Events resolve by bundle id, full
-  stop. A bundle per guest would work but costs one Automation prompt per
-  guest, forever.
+- **`Application(pid)` in JavaScript for Automation.** With two processes of
+  the bots' bundle it answered *both* pids from the same process —
+  sequentially, concurrently, and by window id, every call landed in the first
+  process launched. Both processes number their windows identically
+  (`windows[0].id()` was the same in each), so a misrouted event even finds a
+  matching window: bot-1's mute muted bot-2, bot-2 never had stats. The script
+  layers resolve by bundle id; only a raw target descriptor carries the pid.
 - **A bare DevTools client** — `--remote-debugging-port=0`, a hand-written
   WebSocket client sending only `Page.navigate` and `Runtime.evaluate`, no
   Playwright, no domain enabling — got "You can't join this video call" in
@@ -270,10 +280,7 @@ against the live meeting; none works, and each took an evening's hour.
   before the next, with `document.readyState` held at `loading` and
   `DOMContentLoaded`/`load` dispatched at the end. Meet then boots fully —
   name field, mic and camera controls, joins the call — with the hooks in
-  place from its first instruction. And still zero calls. That is the
-  measurement that closes the question.
-
-So guests share the run's clip and voice, and the README says so.
+  place from its first instruction. And still zero calls.
 
 ## Other Meet facts worth not rediscovering
 

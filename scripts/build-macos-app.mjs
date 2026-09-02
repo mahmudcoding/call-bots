@@ -97,6 +97,21 @@ run('swiftc', [
   join(projectRoot, 'scripts', 'macos-app', 'main.swift'),
 ])
 
+// The Apple Events helper for Meet guests: one Chrome process per guest,
+// each addressed by pid, which no script layer can do (see
+// src/guest-browser.mjs). Lives beside the app's source so the runtime finds
+// it at <projectRoot>/native/aesend; a source checkout compiles the same file
+// on demand instead.
+step('compiling Apple Events helper (swiftc)')
+mkdirSync(join(resources, 'app', 'native'), { recursive: true })
+run('swiftc', [
+  '-O',
+  '-swift-version', '5',
+  '-target', `${arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos12.0`,
+  '-o', join(resources, 'app', 'native', 'aesend'),
+  join(projectRoot, 'scripts', 'macos-app', 'aesend.swift'),
+])
+
 // --- 3. app payload ----------------------------------------------------------
 step('copying app payload')
 cpSync(join(projectRoot, 'src'), join(resources, 'app', 'src'), { recursive: true })

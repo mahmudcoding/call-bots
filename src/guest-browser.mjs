@@ -1,30 +1,53 @@
 // The browser Google Meet guests actually get in with.
 //
 // Meet refuses anonymous joins from a browser with a debugger attached — same
-// window, same meeting, same minute: readable through AppleScript, refused
+// window, same meeting, same minute: readable through Apple Events, refused
 // through CDP. So a guest gets no Playwright and no --remote-debugging-port. It
 // is a real, ordinary window on a throwaway profile, scripted through Chrome's
 // own `execute javascript`, which Meet cannot tell from the page's own code.
+//
+// One Chrome process per guest. Chrome's fake camera and microphone are
+// process-wide flags, so guests sharing a process shared one clip and one
+// voice; a process each gives every guest its own, cycling through the five
+// clips and voices exactly as Aloqa bots do. Neither AppleScript nor
+// JavaScript for Automation can do this — `tell application id` reaches ONE
+// process per bundle id, and Application(pid) was measured to answer from that
+// same process whatever pid it was given — but the Apple Event Manager itself
+// addresses a process by pid without ambiguity. A small compiled helper,
+// scripts/macos-app/aesend.swift, sends the handful of events needed with the
+// target built from the pid and nothing in between: twelve concurrent calls
+// to two processes, every answer from the right one. A pid that is gone is an
+// error, never a launch of a stray Chrome.
+//
+// The processes still run from a copy of Chrome carrying its own bundle
+// identity. The Automation grant macOS asks for is per target application, and
+// it should name the bots' browser — not hand a script the run of the user's
+// own Chrome.
 //
 // Not incognito, though it started that way: an incognito window refuses to
 // inherit the camera and microphone grant seeded into the profile, and Meet
 // then has nothing to offer but "Continue without microphone and camera". A
 // fresh profile is already signed out, which is all a guest actually needs.
 //
-// Apple Events reach only ONE process per bundle id, and which one is not
-// stable, so the bots cannot share the name "Google Chrome" with the user's
-// browser. They get a copy of Chrome carrying its own identity instead.
-//
 // See CLAUDE.md for the measurements behind every line of this.
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { RUN_MARKER, googleChromePath } from './browser.mjs'
-import { baseDir } from './config.mjs'
+import { baseDir, projectRoot } from './config.mjs'
 import { plain as log } from './log.mjs'
 
 const run = promisify(execFile)
@@ -38,87 +61,106 @@ const sourceApp = () => {
   return binary ? binary.replace(/\/Contents\/MacOS\/Google Chrome$/u, '') : null
 }
 const READY_TIMEOUT = 60_000
+// How long a closing browser gets to exit on its own before it is killed.
+const EXIT_WAIT = 6000
 
-const quote = (value) => `"${String(value).replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`
+// ---------------------------------------------------------------------------
+// The helper.
 
-// Ten seconds is long for one Apple Event and short enough that a browser too
-// busy to answer does not hold a queue slot for half a minute — and a kill
-// that means it: osascript stuck inside an Apple Event ignores SIGTERM, which
-// is how thirty of them came to be alive at once.
-const osascript = async (script, timeout = 10_000) => {
-  const { stdout } = await run('osascript', ['-e', script], {
-    timeout,
-    killSignal: 'SIGKILL',
-    maxBuffer: 16 * 1024 * 1024,
+const HELPER_SOURCE = join(projectRoot, 'scripts', 'macos-app', 'aesend.swift')
+// Built into the app bundle by scripts/build-macos-app.mjs; a source checkout
+// compiles it once into the data directory and again when the source changes.
+const HELPER_BUNDLED = join(projectRoot, 'native', 'aesend')
+const HELPER_BUILT = join(baseDir, 'aesend')
+
+let helperPromise = null
+const ensureHelper = () => {
+  helperPromise ??= (async () => {
+    if (existsSync(HELPER_BUNDLED)) return HELPER_BUNDLED
+    if (!existsSync(HELPER_SOURCE)) {
+      throw new Error('the Call Bots app is missing its Apple Events helper — reinstall it')
+    }
+    const fresh = existsSync(HELPER_BUILT) && statSync(HELPER_BUILT).mtimeMs >= statSync(HELPER_SOURCE).mtimeMs
+    if (fresh) return HELPER_BUILT
+    try {
+      await run('swiftc', ['--version'], { timeout: 30_000 })
+    } catch {
+      throw new Error(
+        'Meet guests need the Call Bots helper, and this checkout cannot build it — ' +
+          'install Xcode Command Line Tools (xcode-select --install) or use the packaged app',
+      )
+    }
+    log.info('compiling the Apple Events helper for Meet guests — one time')
+    mkdirSync(baseDir, { recursive: true })
+    await run('swiftc', ['-O', '-o', HELPER_BUILT, HELPER_SOURCE], { timeout: 300_000 })
+    return HELPER_BUILT
+  })().catch((error) => {
+    helperPromise = null
+    throw error
   })
-  return stdout.trimEnd()
+  return helperPromise
 }
 
-const tell = (body) => `tell application id ${quote(BUNDLE_ID)}\n${body}\nend tell`
+// One helper invocation: arguments, optional stdin, and a timeout that kills.
+// Ten seconds is long for one Apple Event and short enough that a browser too
+// busy to answer does not hold a queue slot for half a minute.
+const invoke = (helper, args, { input = null, timeout = 10_000 } = {}) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(helper, args, {
+      stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      env: { ...process.env, AESEND_TIMEOUT: String(Math.ceil(timeout / 1000)) },
+    })
+    let out = ''
+    let err = ''
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      child.kill('SIGKILL')
+      reject(new Error('Apple Event timed out'))
+    }, timeout + 1000)
+    child.stdout.on('data', (chunk) => {
+      out += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      err += chunk
+    })
+    child.on('error', (error) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.on('close', (code) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      if (code === 0) resolve(out.replace(/\n$/u, ''))
+      else reject(new Error(err.trim() || `helper exited ${code}`))
+    })
+    if (input !== null) {
+      child.stdin.on('error', () => {})
+      child.stdin.end(input)
+    }
+  })
 
-// Never send an Apple Event to a browser that is not running. `tell application
-// id ...` LAUNCHES the app when it is not — and this app is a copy of Chrome,
-// so launching it without a --user-data-dir makes it join the user's own Chrome
-// and open windows there. One stray `count of windows` did exactly that, twice.
-// System Events answers without launching anything.
 // macOS refuses the Apple Event outright when Automation permission has not
 // been granted — which must not be read as "the browser is not running". It is
 // a different problem with a different fix, and it has to be said out loud.
-const NOT_PERMITTED = /not authorized to send apple events|-1743|not permitted/iu
+const NOT_PERMITTED = /-1743|not authorized|not permitted/iu
 const PERMISSION_HELP =
   'Call Bots needs permission to control the Call Bots browser — ' +
   'System Settings → Privacy & Security → Automation → Call Bots'
+const GONE = /-1728\b/u
+const NO_PROCESS = /-600\b|-609\b/u
 
-// Asked of LaunchServices directly, which is exactly what `tell application
-// id` consults before deciding whether to launch — and it needs no Automation
-// permission at all. The earlier System Events check did: from the packaged
-// app every one of those queries failed, every liveness answer was wrong, and
-// the whole guest path fell over while the same code ran clean from a shell.
-const browserRunning = async () => {
-  // Once started, the browser is this process's own child, and its exit is an
-  // event already delivered — no lookup needed, and none spawned per Apple
-  // Event. Before that, and while it is being stopped, ask the system.
-  const child = shared?.child
-  if (child) return child.exitCode === null && child.signalCode === null
-  let out
-  try {
-    ;({ stdout: out } = await run('lsappinfo', ['find', `bundleid=${BUNDLE_ID}`], { timeout: 10_000 }))
-  } catch {
-    return false
-  }
-  return /^ASN:/u.test(out.trim())
-}
-
-const processCount = async () => {
-  try {
-    const { stdout } = await run('lsappinfo', ['find', `bundleid=${BUNDLE_ID}`], { timeout: 10_000 })
-    return String(stdout.split('\n').filter((line) => /^ASN:/u.test(line.trim())).length)
-  } catch {
-    return '?'
-  }
-}
-
-// One Apple Event to the bot browser itself, sent before any guest window
-// exists, so macOS's Automation prompt for it appears when a person can answer
-// it — not while bots are already launching, which was measured as a guest
-// that never navigated. The call blocks while the dialog is up and gets the
-// time a person needs.
-const preflightPermissions = async () => {
-  if (!(await browserRunning())) return
-  try {
-    await osascript(tell('return count of windows'), 120_000)
-  } catch (error) {
-    if (NOT_PERMITTED.test(String(error.message))) throw new Error(PERMISSION_HELP)
-  }
-}
-
-// Chrome answers Apple Events one at a time, so sending more at once only
-// queues them inside Chrome, where a caller that gave up waiting cannot take
-// its request back. Queue them here instead, a few at a time, and refuse
-// outright what has already waited longer than any caller would: with three
-// guests and a dashboard polling every second, that is how every probe stopped
-// timing out at once.
-const SPEAK_AT_ONCE = 3
+// Chrome answers Apple Events one at a time per process, so sending more at
+// once only queues them inside Chrome, where a caller that gave up waiting
+// cannot take its request back. Queue them here instead, a few at a time, and
+// refuse outright what has already waited longer than any caller would: with
+// three guests and a dashboard polling every second, that is how every probe
+// stopped timing out at once.
+const SPEAK_AT_ONCE = 4
 const SPEAK_QUEUE_MS = 6000
 let speaking = 0
 const speakQueue = []
@@ -143,25 +185,30 @@ const doneSpeaking = () => {
   nextSpeaker()
 }
 
-const speak = async (body) => {
-  if (!(await browserRunning())) throw new Error('the Call Bots browser is not running')
+const alive = (proc) => proc.child.exitCode === null && proc.child.signalCode === null
+
+// One Apple Event to one guest's browser.
+const speak = async (proc, args, options = {}) => {
+  if (!alive(proc)) throw new Error('the Call Bots browser is not running')
+  const helper = await ensureHelper()
   await turnToSpeak()
-  let out
   try {
-    out = await osascript(tell(body))
+    return await invoke(helper, [String(proc.child.pid), ...args], options)
   } catch (error) {
-    if (NOT_PERMITTED.test(String(error.message))) throw new Error(PERMISSION_HELP)
+    const message = String(error.message)
+    if (NOT_PERMITTED.test(message)) throw new Error(PERMISSION_HELP)
+    if (GONE.test(message)) throw new Error('this Meet guest window is gone')
+    if (NO_PROCESS.test(message)) throw new Error('the Call Bots browser is not running')
     throw error
   } finally {
     doneSpeaking()
   }
-  if (process.env.CALL_BOTS_DEBUG_MEET) {
-    console.error('[speak]', body.split('\n').pop().slice(0, 44), '| procs after:', await processCount())
-  }
-  return out
 }
 
-// A copy of Chrome with its own bundle identifier, so AppleScript can address
+// ---------------------------------------------------------------------------
+// The bundle.
+
+// A copy of Chrome with its own bundle identifier, so Apple Events can address
 // the bots' browser without ever reaching the user's. Built once and kept.
 const bundleVersion = async (app) => {
   try {
@@ -207,8 +254,8 @@ export const ensureGuestBundle = async () => {
 }
 
 // One LaunchServices registration for the bundle id, at the path that exists.
-// `tell application id` resolves through LaunchServices, and a stale record —
-// a staging copy, an old build — is a launch of the wrong thing.
+// A stale record — a staging copy, an old build — is the wrong thing in the
+// Automation prompt and in Launch Services' idea of what the bundle is.
 const LSREGISTER =
   '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
 const registerBundle = async () => {
@@ -216,63 +263,8 @@ const registerBundle = async () => {
   await run(LSREGISTER, ['-f', BUNDLE_PATH], { timeout: 60_000 }).catch(() => {})
 }
 
-// Window ids run past 2^30, and AppleScript turns a literal that big into a
-// real — "whose id is 1439954207" goes looking for 1.439954207E+9 and fails
-// with "Invalid index". Comparing as text sidesteps the conversion entirely.
-// By id, as an object specifier Chrome resolves when each line runs. This
-// used to walk `windows` and keep the loop variable — a reference by
-// position — and Chrome orders windows front-to-back, so a window made or
-// raised between the walk and the use moved every position along: one
-// guest's navigation landed in another's window, and a failed guest closed
-// a window that was never its own.
-const onWindow = (windowId, body) =>
-  [
-    'try',
-    `  set _w to window id ${String(windowId)}`,
-    'on error',
-    '  error "this Meet guest window is gone"',
-    'end try',
-    'set _t to active tab of _w',
-    body,
-  ].join('\n')
-
-const windowIds = async () => {
-  const out = await speak('return id of every window').catch(() => '')
-  return out.split(',').map((value) => value.trim()).filter(Boolean)
-}
-
-let shared = null
-
-// Stream stats for a guest come from chrome://webrtc-internals, kept open in
-// one extra window of the shared browser. It sees every peer connection in the
-// process — including the ones Meet hides in module closures, which nothing
-// injected into the page can reach — and, unlike a page, Chrome's AppleScript
-// interface is allowed to read it. It polls getStats itself, once a second,
-// and renders the results into tables whose ids spell out what they hold:
-// <rid>-<lid>-table-<statId>-<field>.
-const INTERNALS = 'chrome://webrtc-internals/'
-
-// Every new window is found by diffing ids before and after "make new window",
-// so two of those in flight at once each take the other's window: a guest
-// ended up holding the stats window and navigated its own to nowhere. One at
-// a time, always.
-let creating = Promise.resolve()
-const createWindow = (work) => {
-  const turn = creating.then(work, work)
-  creating = turn.catch(() => {})
-  return turn
-}
-
-// The id comes back from the creation itself. This used to list the windows
-// before and after making one and take the difference — and under load, a
-// listing that failed read as an empty list, so the "new" window was whichever
-// existing one came first: a guest was handed another guest's window, drove
-// it, and closed it on its way out.
-const newWindowId = async () => {
-  const id = await speak('set _w to make new window\nreturn (id of _w) as text')
-  if (!/^\d+$/u.test(id.trim())) throw new Error('the Call Bots browser did not open a window')
-  return id.trim()
-}
+// ---------------------------------------------------------------------------
+// Windows.
 
 // Guest windows are small and tiled, not left where Chrome drops them, one on
 // top of another at full size. Meet sizes what it asks the server for by the
@@ -282,55 +274,29 @@ const newWindowId = async () => {
 const WINDOW_W = 640
 const WINDOW_H = 440
 const COLUMNS = 3
-const placeWindow = async (windowId, slot) => {
+let slots = 0
+const placeWindow = async (proc, windowId, slot) => {
   const col = slot % COLUMNS
   const row = Math.floor(slot / COLUMNS) % 3
   const x = col * WINDOW_W
   const y = 40 + row * (WINDOW_H + 10)
-  await speak(onWindow(windowId, `set bounds of _w to {${x}, ${y}, ${x + WINDOW_W}, ${y + WINDOW_H}}`)).catch(
-    () => {},
-  )
+  await speak(proc, ['bounds', windowId, String(x), String(y), String(WINDOW_W), String(WINDOW_H)]).catch(() => {})
 }
 
-const ensureStatsWindow = async () => {
-  if (!shared) return null
-  // Memoised while in flight: two guests opening at once must not each build
-  // a stats window of their own.
-  // A failure is not memoised: one window that would not open must not cost
-  // the whole run its stats, so the next read tries again.
-  const mine = (shared.statsWindowPromise ??= createWindow(async () => {
-    const windowId = await newWindowId()
-    await speak(onWindow(windowId, `set URL of _t to ${quote(INTERNALS)}`))
-    // Nobody needs to see it; it keeps polling while minimised.
-    await speak(onWindow(windowId, 'set minimized of _w to true')).catch(() => {})
-    if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] stats window', windowId)
-    return windowId
-  }).catch((error) => {
-    if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] stats window failed:', error.message)
-    if (shared?.statsWindowPromise === mine) shared.statsWindowPromise = null
-    return null
-  }))
-  shared.statsWindow = await mine
-  return shared.statsWindow
-}
+// Stream stats for a guest come from chrome://webrtc-internals, kept open in a
+// second, minimised window of its process. It sees every peer connection in
+// the process — including the ones Meet hides in module closures, which
+// nothing injected into the page can reach — and, unlike a page, Chrome's
+// scripting interface is allowed to read it. It polls getStats itself, once a
+// second, and renders the results into tables whose ids spell out what they
+// hold: <rid>-<lid>-table-<statId>-<field>.
+const INTERNALS = 'chrome://webrtc-internals/'
 
-// The stats window a read could not reach — closed by hand, say — is forgotten,
-// so the next read opens another rather than asking a gone window forever.
-const forgetStatsWindow = (windowId) => {
-  if (shared?.statsWindow === windowId) {
-    shared.statsWindow = null
-    shared.statsWindowPromise = null
-  }
-}
-
-// One read of the whole page: which connection belongs to which page URL, and
-// the handful of fields the dashboard shows. Everything else on the page is
-// SDP and candidate grids the reader never touches.
-// Single line, like everything sent through AppleScript. The bot's own tile
-// first — it is the one carrying Meet's own-video controls (Reframe,
-// Backgrounds, effects), which no remote tile has — and only then the biggest
-// playing video, because in a grid of three the biggest can be somebody else's
-// dark camera.
+// The dashboard's card thumbnail, drawn in the page. The bot's own tile first —
+// it is the one carrying Meet's own-video controls (Reframe, Backgrounds,
+// effects), which no remote tile has — and only then the biggest playing
+// video, because in a grid of three the biggest can be somebody else's dark
+// camera.
 const GRAB_VIDEO = [
   '(function(){',
   'var playing=function(v){return v&&v.readyState>=2&&v.videoWidth>0&&!v.paused};',
@@ -349,6 +315,9 @@ const GRAB_VIDEO = [
   '})()',
 ].join('')
 
+// One read of the whole page: which connection belongs to which page URL, and
+// the handful of fields the dashboard shows. Everything else on the page is
+// SDP and candidate grids the reader never touches.
 const INTERNALS_READ = [
   '(function(){',
   'var heads={};',
@@ -366,26 +335,15 @@ const INTERNALS_READ = [
   '})()',
 ].join('')
 
-const readInternals = async () => {
-  const windowId = await ensureStatsWindow()
-  if (!windowId) return null
-  let out = ''
-  try {
-    out = await speak(onWindow(windowId, `return execute _t javascript ${quote(INTERNALS_READ)}`))
-  } catch (error) {
-    if (/window is gone/u.test(error.message)) forgetStatsWindow(windowId)
-    return null
-  }
-  try {
-    return JSON.parse(out)
-  } catch {
-    return null
-  }
-}
+// ---------------------------------------------------------------------------
+// Processes.
 
-const startShared = async (media, options) => {
+// Every guest's process, so a run that dies can still take them down.
+const processes = new Set()
+
+const startProcess = async (media, options) => {
   clearStaleProfiles()
-  const bundle = await ensureGuestBundle()
+  const [bundle] = await Promise.all([ensureGuestBundle(), ensureHelper()])
   const userDataDir = mkdtempSync(join(tmpdir(), 'call-bots-meet-guests-'))
   // Scripting is a per-profile preference with no command-line flag, and it has
   // to be there before Chrome first reads the profile.
@@ -415,20 +373,21 @@ const startShared = async (media, options) => {
       `--user-data-dir=${userDataDir}`,
       // Not incognito. A throwaway profile is already signed out, which is all
       // a guest needs, and incognito refuses to inherit the camera and
-      // microphone grant seeded below — leaving Meet stuck offering to join
+      // microphone grant seeded above — leaving Meet stuck offering to join
       // without them.
       '--lang=en-US',
       '--no-first-run',
       '--no-default-browser-check',
       // Or macOS asks for the login password so this re-signed copy can read
-      // the real Chrome's "Chrome Safe Storage". A throwaway incognito profile
-      // has no use for it.
+      // the real Chrome's "Chrome Safe Storage". A throwaway profile has no
+      // use for it.
       '--use-mock-keychain',
       '--password-store=basic',
       '--mute-audio',
       '--autoplay-policy=no-user-gesture-required',
       '--use-fake-device-for-media-stream',
-      // Process-wide, so every guest in a run shares this clip and this voice.
+      // This process's own clip and voice: the flags are process-wide, and
+      // the process is this guest's alone.
       ...(media && !options.noVideo ? [`--use-file-for-fake-video-capture=${media.video}`] : []),
       ...(media && !options.noAudio ? [`--use-file-for-fake-audio-capture=${media.audio}`] : []),
       `${RUN_MARKER}=${options.runId}`,
@@ -436,66 +395,73 @@ const startShared = async (media, options) => {
     ],
     { stdio: 'ignore', detached: true },
   )
-
-  // Wait for the process to exist before addressing it, or the first Apple
-  // Event launches a second copy into the user's Chrome.
+  const proc = { child, userDataDir }
+  processes.add(proc)
   if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] spawned pid', child.pid)
+
+  // The first answer takes as long as a person needs: the very first Apple
+  // Event to the bots' browser is what raises macOS's Automation prompt, and
+  // it blocks until that is answered. A pid cannot be launched, so asking too
+  // early only errors and is asked again.
   const deadline = Date.now() + READY_TIMEOUT
-  let asked = false
-  while (Date.now() < deadline) {
-    if (await browserRunning()) {
-      if (!asked) {
-        asked = true
-        await preflightPermissions()
-      }
-      const ids = await windowIds()
-      if (ids.length > 0) return { child, userDataDir, windows: new Set(), spare: ids[0], slots: 0 }
-    }
+  while (Date.now() < deadline && alive(proc)) {
+    const count = await speak(proc, ['count'], { timeout: 120_000 }).catch((error) => {
+      if (error.message === PERMISSION_HELP) throw error
+      return null
+    })
+    if (Number(count) >= 1) return proc
     await new Promise((resolve) => setTimeout(resolve, 300))
   }
-  stop(child, userDataDir)
-  throw new Error('the Call Bots browser did not come up for the Meet guests')
+  await stop(proc)
+  throw new Error('the Call Bots browser did not come up for this Meet guest')
 }
 
-// The kill itself is synchronous, so an exit handler can call this without
-// waiting; a caller that can wait gets the process's actual exit, so the
-// orchestrator's sweep does not find a browser still on its way out and
-// report it as a leftover.
-const stop = async (child, userDataDir) => {
-  try {
-    process.kill(-child.pid)
-  } catch {
-    try {
-      child.kill()
-    } catch {
-      // Already gone.
+// A polite quit, then the process's actual exit — so the orchestrator's sweep
+// never finds a browser still on its way out and reports it as a leftover —
+// and a kill for one that lingers: a throwaway profile has nothing to save.
+const stop = async (proc) => {
+  processes.delete(proc)
+  if (processes.size === 0) slots = 0
+  if (alive(proc)) {
+    await speak(proc, ['quit'], { timeout: 5_000 }).catch(() => {})
+    const gone = Date.now() + EXIT_WAIT
+    while (Date.now() < gone && alive(proc)) {
+      await new Promise((resolve) => setTimeout(resolve, 200))
     }
   }
-  const gone = Date.now() + EXIT_WAIT
-  while (Date.now() < gone && (await browserRunning())) {
+  if (alive(proc)) kill(proc, 'SIGTERM')
+  const dead = Date.now() + 2000
+  while (Date.now() < dead && alive(proc)) {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
-  // Still here after a polite ask — a throwaway profile has nothing to save.
-  if (await browserRunning()) {
-    try {
-      process.kill(-child.pid, 'SIGKILL')
-    } catch {
-      // Gone between the check and the kill.
-    }
+  if (alive(proc)) {
+    kill(proc, 'SIGKILL')
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   // Chrome keeps unlinking its own files for several seconds after the kill,
   // and a removal that lands inside that window loses — measured as one
   // profile left behind per run at 2.5 s of retries. Keep trying for a while,
-  // and let startShared clear whatever a crashed run left.
+  // and let the next start clear whatever a crashed run left.
   const sweep = (attempt = 0) => {
     try {
-      rmSync(userDataDir, { recursive: true, force: true })
+      rmSync(proc.userDataDir, { recursive: true, force: true })
     } catch {
       if (attempt < 20) setTimeout(() => sweep(attempt + 1), 1000).unref?.()
     }
   }
   sweep()
+}
+
+const kill = (proc, signal) => {
+  try {
+    process.kill(-proc.child.pid, signal)
+  } catch {
+    try {
+      proc.child.kill(signal)
+    } catch {
+      // Already gone.
+    }
+  }
 }
 
 // Profiles a previous run could not remove — it crashed, or Chrome outlived
@@ -508,9 +474,10 @@ const clearStaleProfiles = () => {
   } catch {
     return
   }
+  const held = new Set([...processes].map((proc) => proc.userDataDir))
   for (const name of names) {
     const path = join(dir, name)
-    if (shared && path === shared.userDataDir) continue
+    if (held.has(path)) continue
     try {
       rmSync(path, { recursive: true, force: true })
     } catch {
@@ -519,21 +486,23 @@ const clearStaleProfiles = () => {
   }
 }
 
-// Serialised: two guests starting at once must not each start a browser.
-let starting = null
-
-// The browser is detached so a group kill can target it precisely, which also
-// means nothing kills it for us. A run that dies without tearing down would
-// otherwise leave its windows on screen for good.
+// The browsers are detached so a group kill can target each precisely, which
+// also means nothing kills them for us. A run that dies without tearing down
+// would otherwise leave its windows on screen for good.
 let exitHooked = false
 const killOnExit = () => {
   if (exitHooked) return
   exitHooked = true
   const bail = () => {
-    if (!shared) return
-    const { child, userDataDir } = shared
-    shared = null
-    stop(child, userDataDir)
+    for (const proc of processes) {
+      kill(proc, 'SIGTERM')
+      try {
+        rmSync(proc.userDataDir, { recursive: true, force: true })
+      } catch {
+        // The next start clears it.
+      }
+    }
+    processes.clear()
   }
   process.once('exit', bail)
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -544,12 +513,13 @@ const killOnExit = () => {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The window.
+
 // How long one read of webrtc-internals serves every asker. The dashboard's
 // state request and the health tick both want a summary; two reads a few
 // milliseconds apart would make the later one a rate over no time at all.
 const FRESH_MS = 1500
-// How long a closing browser gets to exit on its own before it is killed.
-const EXIT_WAIT = 8000
 // The gap between a window's first two reads, which together make its first
 // real rate. Longer than a refresh of webrtc-internals, or the pair could
 // straddle none and report a bot sending nothing.
@@ -561,12 +531,15 @@ const FIRST_SAMPLE_MS = 2500
 const RATE_WINDOW_MS = 6000
 
 export class GuestWindow {
-  constructor(windowId, tag) {
+  constructor(proc, windowId, tag) {
+    this.proc = proc
     this.windowId = windowId
     // Rides in the URL fragment, which Meet ignores and webrtc-internals
-    // prints, so this window's connections can be told from the others'.
+    // prints, so this window's connections can be told from any other's.
     this.tag = tag
     this.closed = false
+    this.statsWindow = null
+    this.statsPromise = null
     // Cumulative bytes per stream over the last RATE_WINDOW_MS of reads,
     // shared by both readers: every read is another sample for the other.
     this.samples = new Map()
@@ -575,43 +548,88 @@ export class GuestWindow {
   }
 
   static async open(media, options, { tag = 'guest' } = {}) {
-    if (!shared) {
-      killOnExit()
-      starting ??= startShared(media, options).finally(() => {
-        starting = null
-      })
-      shared = await starting
+    if (process.platform !== 'darwin') {
+      throw new Error('Meet guests need macOS — on this machine, send Meet bots as Google accounts')
     }
-
-    // The stats window goes first, so it is never in flight beside a guest's.
-    await ensureStatsWindow()
-    // The first guest takes the window the browser opened with; the rest get
-    // one each, so every guest is its own Meet participant. Normal windows,
-    // deliberately: the profile is a throwaway that is already signed out, and
-    // an incognito window would not inherit the camera and microphone grant
-    // seeded into it — leaving Meet nothing to offer but "Continue without
-    // microphone and camera".
-    const spare = shared.spare
-    shared.spare = null
-    const windowId = spare ?? (await createWindow(newWindowId))
+    killOnExit()
+    const proc = await startProcess(media, options)
+    let windowId
+    try {
+      windowId = (await speak(proc, ['window-id', '1'])).trim()
+      if (!/^\d+$/u.test(windowId)) throw new Error('the Call Bots browser opened no window')
+    } catch (error) {
+      await stop(proc)
+      throw error
+    }
     if (process.env.CALL_BOTS_DEBUG_MEET) {
-      console.error('[guest-browser] window', windowId, 'for', tag, spare ? '(spare)' : '(new)')
+      console.error('[guest-browser] pid', proc.child.pid, 'window', windowId, 'for', tag)
     }
-    shared.windows.add(windowId)
-    await placeWindow(windowId, shared.slots++)
-    return new GuestWindow(windowId, tag)
+    await placeWindow(proc, windowId, slots++)
+    return new GuestWindow(proc, windowId, tag)
   }
 
   #tagged(url) {
     return url.includes('#') ? url : `${url}#cb-${this.tag}`
   }
 
+  #speak(args, options) {
+    return speak(this.proc, args, options)
+  }
+
+  #exec(windowId, source) {
+    return this.#speak(['exec', windowId], { input: source })
+  }
+
+  // The second window of this guest's process, on webrtc-internals. Memoised
+  // while in flight; a failure is not, so the next read tries again rather
+  // than costing the guest its stats for the whole call.
+  async #ensureStatsWindow() {
+    if (this.closed) return null
+    if (this.statsWindow) return this.statsWindow
+    const mine = (this.statsPromise ??= (async () => {
+      const id = (await this.#speak(['new-window'])).trim()
+      if (!/^\d+$/u.test(id)) throw new Error('the Call Bots browser did not open a window')
+      await this.#speak(['set-url', id, INTERNALS])
+      // Nobody needs to see it; it keeps polling while minimised.
+      await this.#speak(['minimize', id]).catch(() => {})
+      if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] stats window', id, 'for', this.tag)
+      return id
+    })().catch((error) => {
+      if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] stats window failed:', error.message)
+      if (this.statsPromise === mine) this.statsPromise = null
+      return null
+    }))
+    this.statsWindow = await mine
+    return this.statsWindow
+  }
+
+  async #readInternals() {
+    const windowId = await this.#ensureStatsWindow()
+    if (!windowId) return null
+    let out = ''
+    try {
+      out = await this.#exec(windowId, INTERNALS_READ)
+    } catch (error) {
+      // Closed by hand, say: forgotten, so the next read opens another rather
+      // than asking a gone window forever.
+      if (/window is gone/u.test(error.message)) {
+        this.statsWindow = null
+        this.statsPromise = null
+      }
+      return null
+    }
+    try {
+      return JSON.parse(out)
+    } catch {
+      return null
+    }
+  }
+
   // The same shape the stream monitor's summary takes, so the card needs no
-  // second code path. Rates are differenced against the previous read, over
-  // the real gap between them.
-  // The expanded stream panel, in the shape the monitor's snapshot takes so
-  // the dashboard needs no second renderer. Everything here is what
-  // webrtc-internals already prints; this only arranges it.
+  // second code path; and the expanded stream panel in the shape the
+  // monitor's snapshot takes, so the dashboard needs no second renderer.
+  // Everything here is what webrtc-internals already prints; this only
+  // arranges it.
   rtcSummary() {
     return this.#shared('summary', () => this.#readSummary())
   }
@@ -640,14 +658,20 @@ export class GuestWindow {
     return this.inFlight[kind]
   }
 
+  #mine(page) {
+    const marker = `#cb-${this.tag}`
+    return new Set(
+      Object.entries(page.heads)
+        .filter(([, url]) => url.includes(marker))
+        .map(([pc]) => pc),
+    )
+  }
+
   async #readSnapshot() {
     if (this.closed) return null
-    const page = await readInternals()
+    const page = await this.#readInternals()
     if (!page) return null
-    const marker = `#cb-${this.tag}`
-    const mine = new Set(
-      Object.entries(page.heads).filter(([, url]) => url.includes(marker)).map(([pc]) => pc),
-    )
+    const mine = this.#mine(page)
     if (mine.size === 0) return null
     const now = Date.now()
     const rate = (key, bytes) => this.#rate(key, bytes, now)
@@ -737,7 +761,7 @@ export class GuestWindow {
 
   async #readSummary() {
     if (this.closed) return null
-    let page = await readInternals()
+    let page = await this.#readInternals()
     if (!page) return null
     // A rate is the difference between two reads, so a first read on its own
     // reports every stream at zero — and a dashboard opened the moment a bot
@@ -746,7 +770,7 @@ export class GuestWindow {
     if (this.samples.size === 0) {
       if (this.#tally(page) === null) return null
       await new Promise((resolve) => setTimeout(resolve, FIRST_SAMPLE_MS))
-      page = (await readInternals()) ?? page
+      page = (await this.#readInternals()) ?? page
     }
     return this.#tally(page)
   }
@@ -763,12 +787,7 @@ export class GuestWindow {
   }
 
   #tally(page) {
-    const marker = `#cb-${this.tag}`
-    const mine = new Set(
-      Object.entries(page.heads)
-        .filter(([, url]) => url.includes(marker))
-        .map(([pc]) => pc),
-    )
+    const mine = this.#mine(page)
     if (mine.size === 0) return null
 
     const now = Date.now()
@@ -820,38 +839,28 @@ export class GuestWindow {
     }
   }
 
-  #on(body) {
-    return onWindow(this.windowId, body)
-  }
-
   async url() {
     if (this.closed) return 'about:blank'
-    return speak(this.#on('return URL of _t')).catch(() => 'about:blank')
+    return this.#speak(['url', this.windowId]).catch(() => 'about:blank')
   }
 
-  // `inject` is a one-line expression to run as early as the new document will
-  // take it. Meet grabs RTCPeerConnection into a module closure while its bundle
-  // parses, so anything that arrives after the page has settled is too late to
-  // see a single connection — the only chance is to get in during the load.
   async goto(target) {
     const url = this.#tagged(target)
     const wanted = url.split('#')[0]
-    // A `set URL` on a window Chrome has only just made can lose to the new
-    // tab page still committing underneath it — the tab stays on
-    // chrome://newtab and the bot polls a page that will never be Meet. So
-    // the address is checked, and set again until it holds.
+    const host = new URL(wanted).host
+    // Setting the address on a window Chrome has only just made can lose to
+    // the new tab page still committing underneath it — the tab stays on
+    // chrome://newtab and the bot polls a page that will never be Meet. So the
+    // address is checked, and set again until it holds; and the tab reports
+    // the new address while the old document is still the one answering, so
+    // what is asked is where the document itself says it is.
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      await speak(this.#on(`set URL of _t to ${quote(url)}`))
+      await this.#speak(['set-url', this.windowId, url])
       const settled = Date.now() + 2500
       while (Date.now() < settled) {
         await this.waitForTimeout(250)
         const current = await this.url().catch(() => '')
         if (current.startsWith(wanted)) {
-          // `set URL` returns as soon as the navigation is asked for, and the
-          // tab reports the new address while the old document is still the
-          // one answering — so what is asked is where the document itself
-          // says it is.
-          const host = new URL(wanted).host
           const deadline = Date.now() + 45_000
           while (Date.now() < deadline) {
             const seen = await this.evaluate('location.host+" "+document.readyState').catch(() => null)
@@ -866,13 +875,13 @@ export class GuestWindow {
     throw new Error('the Meet guest window would not navigate')
   }
 
-  // `source` must be a SINGLE LINE: AppleScript string literals cannot span
-  // lines, and a multi-line script comes back as `missing value` rather than an
-  // error. Anything structured is stringified in-page and parsed here.
+  // `source` is a single expression; anything structured is stringified in the
+  // page and parsed here. Chrome hands back the value as text, and nothing at
+  // all for undefined.
   async evaluate(source) {
     if (this.closed) throw new Error('this Meet guest window is closed')
-    const out = await speak(this.#on(`return execute _t javascript ${quote(source)}`))
-    if (out === 'missing value' || out === '') return null
+    const out = await this.#exec(this.windowId, source)
+    if (out === '' || out === 'missing value' || out === 'undefined' || out === 'null') return null
     try {
       return JSON.parse(out)
     } catch {
@@ -884,12 +893,11 @@ export class GuestWindow {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
-  // The dashboard's card thumbnail. First choice: draw the largest playing
-  // <video> on the page — in a call that is the bot's own camera as Meet
-  // renders it — to a canvas and hand back a JPEG. No permission, no window
-  // geometry, and it shows exactly what the bot publishes. Fallback: photograph
-  // the window's rectangle on screen, which needs Screen Recording and shows
-  // whatever sits on top of it.
+  // The dashboard's card thumbnail. First choice: draw the bot's own tile — in
+  // a call, its camera as Meet renders it — to a canvas and hand back a JPEG.
+  // No permission, no window geometry, and it shows exactly what the bot
+  // publishes. Fallback: photograph the window's rectangle on screen, which
+  // needs Screen Recording and shows whatever sits on top of it.
   async screenshot() {
     if (this.closed) return null
     const grabbed = await this.evaluate(GRAB_VIDEO).catch(() => null)
@@ -900,11 +908,9 @@ export class GuestWindow {
   }
 
   async #photograph() {
-    const raw = await speak(this.#on('return bounds of _w')).catch(() => '')
-    const [left, top, right, bottom] = raw.split(',').map((value) => Number(value.trim()))
-    if (![left, top, right, bottom].every(Number.isFinite)) return null
-    const width = right - left
-    const height = bottom - top
+    const raw = await this.#speak(['get-bounds', this.windowId]).catch(() => '')
+    const [left, top, width, height] = raw.split(' ').map((value) => Number(value))
+    if (![left, top, width, height].every(Number.isFinite)) return null
     if (width < 40 || height < 40) return null
     const file = join(tmpdir(), `call-bots-shot-${this.windowId}-${Date.now()}.jpg`)
     try {
@@ -923,17 +929,10 @@ export class GuestWindow {
     return this.closed
   }
 
+  // The whole process goes with the window: it was this guest's alone.
   async close() {
     if (this.closed) return
     this.closed = true
-    await speak(this.#on('close _w')).catch(() => {
-      // A window somebody already closed is not a teardown failure.
-    })
-    shared?.windows.delete(this.windowId)
-    if (shared && shared.windows.size === 0) {
-      const { child, userDataDir } = shared
-      shared = null
-      await stop(child, userDataDir)
-    }
+    await stop(this.proc)
   }
 }
