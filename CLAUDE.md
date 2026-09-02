@@ -106,6 +106,36 @@ Requirements and consequences:
   toolbar read `Выключить микрофон` / `Участники1` / `Показать экран`, and the
   leave button was `Выйти из звонка`, not `Leave call`.
 
+### The two constraints that shape the driver
+
+Both measured, both non-obvious:
+
+1. **Apple Events reach only one Chrome process.** Launch a second Chrome with
+   its own `--user-data-dir` and `tell application "Google Chrome"` starts
+   answering for exactly one of them — the other becomes invisible to scripting.
+   Which one wins is not stable: right after launching the bot Chrome the events
+   went to it, and minutes later they went back to the user's. So a guest driver
+   cannot just spawn its own Chrome and expect to script it.
+
+   The deterministic fix is a **separate application bundle**: copy `Chrome.app`
+   and give the copy its own `CFBundleIdentifier` and `CFBundleName`, then
+   address that name from AppleScript. It never collides with the user's Chrome.
+   A ~300 MB one-time copy, cached in the app's data directory.
+
+2. **One process means one set of fake-capture flags.** `--use-file-for-fake-*`
+   is process-wide, so every guest sharing a Chrome shares a camera clip and a
+   voice. Aloqa bots and Meet account bots still get one apiece — only guests
+   are alike. The alternative is an in-page `getUserMedia` override, which needs
+   document-start injection that AppleScript cannot do.
+
+Note that `open -na "Google Chrome" --args --incognito <url>` does **not** start
+a process — it adds a tab to the existing incognito window, and the `--args` are
+ignored. Only spawning the binary directly makes a new process.
+
+Separate incognito windows in one process all share one incognito profile, and
+Meet still counts each as its own guest — three hand-opened windows joined one
+meeting as three separate participants.
+
 ### Where this is up to
 
 `src/browser.mjs` currently launches guests with `--remote-debugging-port` and
