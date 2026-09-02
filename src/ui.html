@@ -631,6 +631,53 @@ const renderAccounts = () => {
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)]
 const meetMode = () => S.state?.session?.meetMode ?? S.meetMode
 
+// One description of what the Meet empty state says. There used to be two,
+// written in two places and both run on every frame, and they drifted apart the
+// moment guests arrived — the later one silently won and talked about accounts
+// to somebody sending guests.
+const meetEmptyState = (joining) => {
+  const summary = meetProfiles()
+  const guests = meetMode() === 'guest'
+  const count = Math.max(1, Number($('#count').value) || 1)
+  if (joining) {
+    return {
+      title: 'Preparing Google Meet bots',
+      text: guests
+        ? 'Each bot opens the meeting and asks to be let in — admit them in Meet.'
+        : 'Opening each reserved Google account in its own headless Chrome profile.',
+    }
+  }
+  if (guests) {
+    return {
+      title: 'Ready for Google Meet',
+      text: 'Bots will ask to join by name — admit them in Meet once they knock.',
+    }
+  }
+  if (!summary.chromeReady) {
+    return {
+      title: 'Google Chrome is required for Meet',
+      text: 'Install Google Chrome, then add an account from Manage.',
+    }
+  }
+  if (summary.available < count) {
+    // The strip already carries the numbers; this just says where to go.
+    return {
+      title: 'More Google accounts needed',
+      text: 'Meet needs one signed-in account per bot — add them from Manage.',
+    }
+  }
+  return {
+    title: 'Ready for Google Meet',
+    text: 'Choose camera and microphone state, then send the signed-in accounts.',
+  }
+}
+
+const showMeetEmptyState = (joining) => {
+  const { title, text } = meetEmptyState(joining)
+  $('#emptyTitle').textContent = title
+  $('#emptyText').textContent = text
+}
+
 const renderMeetBar = () => {
   const bar = $('#meetBar')
   if (platformId() !== 'meet') {
@@ -762,21 +809,7 @@ const syncPlatformUi = () => {
     (!summary.chromeReady || summary.available < count)
   $('#goBtn').disabled = Boolean(busy || browserUnavailable || meetUnavailable)
   if (id === 'meet' && (S.state?.session?.guests ?? []).length === 0) {
-    if (status === 'joining') {
-      $('#emptyTitle').textContent = 'Preparing Google Meet bots'
-      $('#emptyText').textContent = 'Opening each reserved Google account in its own headless Chrome profile.'
-    } else if (!summary.chromeReady) {
-      $('#emptyTitle').textContent = 'Google Chrome is required for Meet'
-      $('#emptyText').textContent = 'Install Google Chrome, then add an account from Manage.'
-    } else if (summary.available < count) {
-      // The strip already carries the numbers; the empty state just says where
-      // to go and stays out of the way otherwise.
-      $('#emptyTitle').textContent = 'More Google accounts needed'
-      $('#emptyText').textContent = 'Meet needs one signed-in account per bot — add them from Manage.'
-    } else {
-      $('#emptyTitle').textContent = 'Ready for Google Meet'
-      $('#emptyText').textContent = 'Choose camera and microphone state, then send the signed-in accounts.'
-    }
+    showMeetEmptyState(status === 'joining')
   }
 }
 $('#link').oninput = syncPlatformUi
@@ -1662,28 +1695,10 @@ const render = (state) => {
   }
   if (!state.lastError) S.errorShown = null
 
-  // Meet always uses Google Chrome because its saved account profiles belong
-  // to Chrome. Aloqa can use the bundled Chromium that is fetched on demand.
+  // Meet says its own piece; everything else is about the bundled Chromium.
   const selected = platformId()
-  const profileState = meetProfiles()
-  const requested = Math.max(1, Number($('#count').value) || 1)
-  const meetAccounts = selected === 'meet' && meetMode() === 'account'
-  if (selected === 'meet' && joining) {
-    $('#emptyTitle').textContent = 'Preparing Google Meet bots'
-    $('#emptyText').textContent = meetMode() === 'guest'
-      ? 'Each bot opens the meeting and asks to be let in — admit them in Meet.'
-      : 'Opening each reserved Google account in its own headless Chrome profile.'
-  } else if (selected === 'meet' && meetMode() === 'guest') {
-    $('#emptyTitle').textContent = 'Ready for Google Meet'
-    $('#emptyText').textContent =
-      'Bots will ask to join by name — admit them in Meet once they knock.'
-  } else if (meetAccounts && !profileState.chromeReady) {
-    $('#emptyTitle').textContent = 'Google Chrome is required for Meet'
-    $('#emptyText').textContent = 'Install Google Chrome, then add an account from Manage.'
-  } else if (meetAccounts && profileState.available < requested) {
-    // The strip under the link field already carries the counts.
-    $('#emptyTitle').textContent = 'More Google accounts needed'
-    $('#emptyText').textContent = 'Meet needs one signed-in account per bot — add them from Manage.'
+  if (selected === 'meet') {
+    showMeetEmptyState(joining)
   } else if (state.browserInstalling) {
     $('#emptyTitle').textContent = 'Getting the browser ready'
     $('#emptyText').textContent = state.browserProgress

@@ -320,6 +320,11 @@ try {
     await page.locator('#meetBarText').textContent())
   check('a guest batch is sendable however many accounts exist',
     !(await goBtn.isDisabled()))
+  // Two places used to write this line, and the later one won: somebody
+  // sending guests was told to go and add Google accounts.
+  check('and the empty state talks about guests, not accounts',
+    /admit them in Meet/u.test(await page.locator('#emptyText').textContent()),
+    await page.locator('#emptyText').textContent())
   check('and a guest keeps the custom label an account bot cannot have',
     await page.locator('#labelField').isVisible())
 
