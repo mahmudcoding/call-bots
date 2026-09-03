@@ -175,8 +175,16 @@ try {
     step(`resuming ${tag}`)
   } else {
     step(`setting version ${targetVersion}`)
-    run('npm', ['version', targetVersion, '--no-git-tag-version'])
-    versionChanged = true
+    // npm refuses to "change" a version to the one already there, and that
+    // refusal would end the release before it built anything — which is what
+    // happens to anyone who sets the version by hand first, or who reruns a
+    // release that fell over after this step.
+    if (currentVersion === targetVersion) {
+      console.log(`  package.json is already ${targetVersion}`)
+    } else {
+      run('npm', ['version', targetVersion, '--no-git-tag-version'])
+      versionChanged = true
+    }
   }
 
   step('running tests')
