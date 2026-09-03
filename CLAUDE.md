@@ -220,9 +220,14 @@ Clicking is plain `element.click()`.
   to control the *Call Bots browser* — because driving Chrome without a debugger
   *is* Apple Events. It is sent deliberately as the first event after the
   browser comes up, before any guest window exists, with two minutes for a
-  person to answer it. And one Screen Recording prompt, for the card thumbnails
-  (a `screencapture` of the window). Grants are per calling app: the terminal
-  has them, the packaged `Call Bots.app` gets its own. **Never gate anything on
+  person to answer it. **That is the only prompt there should ever be.** A
+  Screen Recording prompt means something asked for `screencapture`: the card
+  thumbnail used to photograph the window's rectangle when its canvas grab
+  came back empty, which is every poll before a bot is in the call — so the
+  dialog appeared the moment guests launched, asking for the run of the whole
+  screen to draw a picture nothing had yet. That fallback is gone. Grants are
+  per calling app: the terminal has them, the packaged `Call Bots.app` gets
+  its own. **Never gate anything on
   System Events**: an earlier build checked liveness through it, the packaged
   app had no grant, macOS put up a dialog, and every Apple Event sat behind it
   until its timeout — a guest was left on Meet's name screen, untouched, while
@@ -234,8 +239,10 @@ Clicking is plain `element.click()`.
 - **No Playwright page**, so no `addInitScript`. The card thumbnail is drawn
   in-page: the largest playing `<video>` (the bot's own tile) onto a canvas,
   returned as a JPEG data URL — no Screen Recording permission, and it shows
-  exactly what the bot publishes. A `screencapture` of the window's rectangle
-  is only the fallback. Nothing injected into a Meet page can see its peer connections —
+  exactly what the bot publishes. There is no fallback: no tile yet means no
+  thumbnail yet, and the card keeps its placeholder. (Photographing the
+  window instead would now capture whatever of the user's desktop sits at
+  those coordinates, since the bot windows are hidden.) Nothing injected into a Meet page can see its peer connections —
   Meet takes `RTCPeerConnection` into a module closure while its bundle parses,
   and an injection during the load still loses the race — and `--load-extension`
   is dead in branded Chrome 152 (`chrome://extensions` stays empty, silently).

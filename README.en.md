@@ -63,7 +63,9 @@ What a guest needs, all on the Mac running Call Bots:
   the way a person drives them.
 - **One macOS Automation prompt**, the first time: *Call Bots wants access to
   control the Call Bots browser.* Click Allow. It appears before any bot window
-  opens.
+  opens, and it is the **only** permission Call Bots asks for. If you are ever
+  shown a Screen Recording prompt, deny it — nothing here needs to read your
+  screen.
 - **macOS.** There are no Meet bots on Linux: the guest windows are driven
   through Apple Events, which do not exist there.
 

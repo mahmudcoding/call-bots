@@ -36,7 +36,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -1001,36 +1000,22 @@ export class GuestWindow {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
-  // The dashboard's card thumbnail. First choice: draw the bot's own tile — in
-  // a call, its camera as Meet renders it — to a canvas and hand back a JPEG.
-  // No permission, no window geometry, and it shows exactly what the bot
-  // publishes. Fallback: photograph the window's rectangle on screen, which
-  // needs Screen Recording and shows whatever sits on top of it.
+  // The dashboard's card thumbnail: the bot's own tile — in a call, its camera
+  // as Meet renders it — drawn to a canvas in the page and handed back as a
+  // JPEG. Nothing else, and deliberately: photographing the window's rectangle
+  // instead used to be the fallback, and it asked macOS for Screen Recording
+  // the moment the first bot launched, before any tile existed to grab. That
+  // permission lets an app read the whole screen; nothing here needs it, and
+  // now that the bot windows are hidden the rectangle would hold whatever of
+  // the user's desktop sits at those coordinates rather than the bot at all.
+  // No tile yet means no thumbnail yet, and the card keeps its placeholder.
   async screenshot() {
     if (this.closed) return null
     const grabbed = await this.evaluate(GRAB_VIDEO).catch(() => null)
     if (typeof grabbed === 'string' && grabbed.startsWith('data:image/jpeg;base64,')) {
       return Buffer.from(grabbed.slice('data:image/jpeg;base64,'.length), 'base64')
     }
-    return this.#photograph()
-  }
-
-  async #photograph() {
-    const raw = await this.#speak(['get-bounds', this.windowId]).catch(() => '')
-    const [left, top, width, height] = raw.split(' ').map((value) => Number(value))
-    if (![left, top, width, height].every(Number.isFinite)) return null
-    if (width < 40 || height < 40) return null
-    const file = join(tmpdir(), `call-bots-shot-${this.windowId}-${Date.now()}.jpg`)
-    try {
-      await run('screencapture', ['-x', '-t', 'jpg', `-R${left},${top},${width},${height}`, file], {
-        timeout: 8_000,
-      })
-      return readFileSync(file)
-    } catch {
-      return null
-    } finally {
-      rmSync(file, { force: true })
-    }
+    return null
   }
 
   isClosed() {
