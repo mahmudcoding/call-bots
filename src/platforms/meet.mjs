@@ -708,6 +708,17 @@ const join = async (ctx) => {
 //
 // A string evaluate like everything else here, so a guest window can answer it
 // too: this is what the dashboard's verify and recoverIfAdmitted run on.
+//
+// Two things about today's Meet shape this. A tile carries no name attribute —
+// no data-self-name, no aria-label — so the name is read the way the stream
+// rows read theirs: the leaf text inside the tile, with control labels, icon
+// ligatures and timers rejected. And Meet paints one participant into more
+// than one <video>, the first of which need not be the one with the picture,
+// so a tile counts as playing when any of its videos is.
+//
+// NOTE: no // comments inside the template below — oneLine() collapses it to a
+// single line, and everything after such a comment would be lost. Which is
+// exactly how this returned "missing value" once.
 
 const REMOTE_SOURCE = oneLine(`(function(){${HELPERS}
   var tiles = [].slice.call(document.querySelectorAll(${js(SEL.tile)})).filter(function (t) {
@@ -723,23 +734,45 @@ const REMOTE_SOURCE = oneLine(`(function(){${HELPERS}
       (pc.getReceivers ? pc.getReceivers() : []).forEach(function (r) { if (r.track && r.track.id) receiving[r.track.id] = 1 })
     })
   } catch (e) {}
+  var live = function (v) { return v && v.readyState >= 2 && v.videoWidth > 0 && !v.paused };
+  var NAMEJUNK = /^(your|my|own|self|local|remote|the|a|an|is|video|audio|camera|microphone|mic|screen|share|shared|sharing|view|feed|stream|preview|presentation|participant|placeholder|avatar|thumbnail|tile|muted|unmuted|off|on|pinned|speaker|you|excellent|good|fair|poor|connection|quality|network|status|speaking|guest|host|owner|admin|moderator|others|might|still|see|full)$/i;
+  var tileName = function (tile) {
+    var counts = {}, order = [], kids = tile.querySelectorAll('*');
+    for (var i = 0; i < kids.length && i < 120; i++) {
+      var k = kids[i];
+      if (k.children && k.children.length) continue;
+      try { if (k.closest('button,[role="button"],[role="menuitem"],[role="img"],[aria-hidden="true"]')) continue } catch (e) {}
+      var t = (k.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (!t || t.length > 40 || /^[\\d\\s:.%]+$/.test(t) || /^[a-z0-9]+(_[a-z0-9]+)+$/.test(t)) continue;
+      var parts = t.split(/[\\s\\-_,./]+/).filter(Boolean), junk = parts.length > 0 && parts.length <= 4;
+      for (var p = 0; p < parts.length && junk; p++) if (!NAMEJUNK.test(parts[p])) junk = false;
+      if (junk) continue;
+      if (!counts[t]) { counts[t] = 0; order.push(t) }
+      counts[t]++
+    }
+    for (var j = 0; j < order.length; j++) if (counts[order[j]] > 1) return order[j];
+    return order.length ? order[order.length - 1] : '';
+  };
   var playsRemote = function (video) {
     try { return (video && video.srcObject ? video.srcObject.getTracks() : []).some(function (t) { return receiving[t.id] }) }
     catch (e) { return false }
   };
   tiles.forEach(function (tile) {
     var aria = tile.getAttribute('aria-label') || '';
-    var video = tile.querySelector('video');
+    var videos = [].slice.call(tile.querySelectorAll('video'));
+    var video = null;
+    for (var vi = 0; vi < videos.length; vi++) if (live(videos[vi])) { video = videos[vi]; break }
+    if (!video) video = videos[0] || null;
     var own = !!tile.querySelector('[aria-label*="Reframe" i], [aria-label*="Backgrounds" i], [aria-label*="effects" i]');
     var local = connections ? !playsRemote(video)
       : (tile.hasAttribute('data-self-name') || /\\b(?:you|your)\\b/i.test(aria) || own);
     var rawName = tile.getAttribute('data-self-name') || tile.getAttribute('data-sort-key') ||
       (tile.querySelector('[data-self-name]') && tile.querySelector('[data-self-name]').getAttribute('data-self-name')) || aria || null;
-    var name = rawName ? String(rawName).split('_')[0].trim() : '';
+    var name = rawName ? String(rawName).split('_')[0].trim() : tileName(tile);
     if (name) summary.names.push((local ? '*' : '') + name);
     if (local) { summary.local += 1; return }
     summary.remote += 1;
-    if (video && video.readyState >= 2 && video.videoWidth > 0 && !video.paused) {
+    if (live(video)) {
       summary.remotePlaying += 1;
       var id = tile.getAttribute('data-participant-id') || name || String(summary.remote);
       var last = seen.get(id);

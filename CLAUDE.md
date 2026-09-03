@@ -351,6 +351,19 @@ Each is still true; none is worth an evening again.
   window's id from the creation (`set _w to make new window` / `id of _w`):
   diffing the window list before and after fails silently under load, when a
   listing that errored read as an empty list.
+- **The participant check reads tiles, not attributes.** Today's Meet tile
+  carries no `data-self-name` and no `aria-label`, so `verify` reported every
+  participant nameless, and it took `tile.querySelector('video')` — the first
+  of the several Meet paints one participant into, which need not be the one
+  with the picture — so every remote read as not playing. It now takes the
+  name from the tile's leaf text (the same read the stream rows use) and
+  counts a tile as playing when any of its videos is: measured
+  `remote 1, remotePlaying 1, names ["Tester 2","*Tester 1"]`.
+- **No `//` comments inside a source that goes through `oneLine()`.** It
+  collapses the script to one line, so everything after such a comment is
+  commented out; the whole evaluate then comes back as `missing value`, which
+  reads like a permissions or timing fault and is neither. `HELPERS` says so
+  and `REMOTE_SOURCE` now says so too — it cost a build to relearn.
 - **A closed page must end a join, not be polled.** Every read of a closed
   window fails, and the join loop treated each failure as "try again next
   tick" — so a bot closed mid-join (a Stop during a batch, a card removed)
