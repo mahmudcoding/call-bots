@@ -391,6 +391,22 @@ Each is still true; none is worth an evening again.
   commented out; the whole evaluate then comes back as `missing value`, which
   reads like a permissions or timing fault and is neither. `HELPERS` says so
   and `REMOTE_SOURCE` now says so too — it cost a build to relearn.
+- **The app's server must not outlive the app.** `applicationWillTerminate`
+  runs for an ordinary quit, not for a crash or a kill, so the node server
+  survived — bots still in the call, nobody able to see or stop them, and port
+  4610 still taken. The next launch then found the old server answering and
+  used it, so an updated app quietly ran the code it replaced. (Three test runs
+  here measured an old build for exactly that reason.) The shell now passes
+  `CALL_BOTS_SUPERVISOR` and the server stops when that pid is gone: measured
+  three seconds after a `kill -9` of the app, with the bots closed and the
+  port free. `pkill -f "MacOS/CallBots"` kills only the shell — quit through
+  the app or `POST /api/quit`.
+- **A launch failure must not leave a bot in `created`.** Removing the Google
+  account path left one call to `guest.releaseProfile()` in the orchestrator's
+  catch — the method was gone, so the handler threw a TypeError of its own, the
+  real error was lost, and the bot sat in `created` for ever while the session
+  said it was running. Found on a cold start, where the first launch is slow
+  enough to fail; it would have hit any failing launch, on either platform.
 - **A closed page must end a join, not be polled.** Every read of a closed
   window fails, and the join loop treated each failure as "try again next
   tick" — so a bot closed mid-join (a Stop during a batch, a card removed)

@@ -586,5 +586,24 @@ export const startServer = async ({ port = 4610, open = true }) => {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
+
+  // Launched by the app: outlive it and the bots stay in the call with nobody
+  // able to see or stop them, and the port stays taken, so the next launch of
+  // the app finds the old server answering and quietly uses it — an update
+  // would appear to do nothing. Ordinary quits are already handled; this is
+  // for the crash and the kill, which no signal handler here would ever see.
+  const supervisor = Number(process.env.CALL_BOTS_SUPERVISOR)
+  if (Number.isInteger(supervisor) && supervisor > 1) {
+    const watch = setInterval(() => {
+      try {
+        process.kill(supervisor, 0)
+      } catch {
+        clearInterval(watch)
+        log.warn('the Call Bots window is gone — closing the bots and stopping')
+        shutdown()
+      }
+    }, 2000)
+    watch.unref()
+  }
   return server
 }

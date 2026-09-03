@@ -222,7 +222,23 @@ const bundleVersion = async (app) => {
   }
 }
 
-export const ensureGuestBundle = async () => {
+// Built once, however many guests ask at once. Two bots starting together on
+// a machine that has never run one both found no bundle and both started
+// building it — two 1.4 GB copies into the same staging directory, one of them
+// moving it into place while the other was still writing. Measured on a cold
+// start: the first bot reached the call, the second sat in "created" for four
+// and a half minutes and never arrived. Shared like the helper's build; a
+// failure clears the memo so the next attempt is a real one.
+let bundlePromise = null
+export const ensureGuestBundle = () => {
+  bundlePromise ??= buildGuestBundle().catch((error) => {
+    bundlePromise = null
+    throw error
+  })
+  return bundlePromise
+}
+
+const buildGuestBundle = async () => {
   const source = sourceApp()
   if (!source) {
     throw new Error('Google Chrome is required for Meet guests — Meet turns away anything else')

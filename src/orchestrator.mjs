@@ -196,7 +196,6 @@ export class Roster {
           }
           launched.push(guest)
         } catch (error) {
-          if (!guest.browser && !guest.context) guest.releaseProfile()
           failed(guest, error)
         }
       },

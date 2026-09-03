@@ -139,6 +139,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     process.arguments = [cli.path, "ui", "--port", port, "--no-open"]
     var env = ProcessInfo.processInfo.environment
     env["CALL_BOTS_HOME"] = home.path
+    // The server watches this pid and stops when it is gone. applicationWill-
+    // Terminate only runs for an ordinary quit, so a crash or a kill would
+    // otherwise leave the server running with its bots in the call, holding
+    // the port — and the next launch of the app, updated or not, would talk to
+    // that old server instead of its own.
+    env["CALL_BOTS_SUPERVISOR"] = String(ProcessInfo.processInfo.processIdentifier)
     process.environment = env
     if let logHandle {
       process.standardOutput = logHandle
