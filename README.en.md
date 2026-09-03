@@ -100,7 +100,9 @@ codecs**, since Meet negotiates its own list and picks AV1 from it whatever the
 preference says. The control is hidden rather than left to fail, and the check
 behind it is in `src/platforms/meet.mjs`. Screen sharing does work — a bot
 shares the same scene an Aloqa bot does, picked up without a picker ever
-appearing on your desktop. And
+appearing on your desktop — but **one bot at a time**: while one presents,
+Meet removes the share control from everyone else, so a second bot asked to
+share reports that it is blocked. And
 Meet turns guests away from meetings created by a personal Google account — the
 bot's card says so; Google Workspace meetings take guests when the admin allows.
 

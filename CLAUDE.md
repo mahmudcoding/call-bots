@@ -323,7 +323,13 @@ Each is still true; none is worth an evening again.
   is clicked by name; and the toolbar's `You are presenting` is what states
   the share is running. Measured on the wire: 1972×1052 at first, which Meet
   then scales down while the scene barely changes — the same thing it does to
-  a person sharing a static screen.
+  a person sharing a static screen. **One presenter at a time**: while a bot
+  is presenting, Meet takes the share control away from every other
+  participant — the toolbar reads "Tester 1 is presenting" and the More
+  options menu has no share entry at all — so a second bot asked to share
+  reports `blocked`, which is the truth about the call rather than a fault.
+  Aloqa lets every bot share at once; this is the one place the fleet share
+  buttons mean something different.
 - **Send codecs do not work.** Meet negotiates its own list and picks AV1 from
   it whatever the preference says — a runtime switch to vp9 and a launch-time
   h264 both left AV1 on the wire.
