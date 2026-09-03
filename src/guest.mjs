@@ -726,6 +726,15 @@ export class Guest {
   // share button is pressed, titled so Chrome's capture-source flag picks it,
   // and animated so anyone watching can see the feed is live.
   async #prepareScreen() {
+    // A guest window has no Playwright context to open a page in. It opens a
+    // window of its own in the same Chrome process instead, on the same scene
+    // this app has always shared, built into a data: URL so it needs nothing
+    // served. Chrome picks it by title when Meet asks to capture.
+    if (!this.instrumented) {
+      return this.page.prepareScene(
+        screenHtml(this.label, guestColorHex(this.user.n - 1), null),
+      )
+    }
     if (this.screenPage && !this.screenPage.isClosed()) return this.screenPage
     const page = await this.context.newPage()
     const video = screenVideoPath()

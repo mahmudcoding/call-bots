@@ -309,9 +309,21 @@ Each is still true; none is worth an evening again.
 
 ## Other Meet facts worth not rediscovering
 
-- **Presenting does not work.** `getDisplayMedia` hands Meet a live 1920x1080
-  track and Meet's own bundle throws `DisconnectedError` and never starts.
-  Reproduced on two meetings, and identically with the codec shim disabled.
+- **Presenting DOES work for a guest** (measured 2026-09-03), though it never
+  did for the signed-in account bots: those had our capture shim answering
+  `getDisplayMedia`, and Meet's own bundle threw `DisconnectedError` on the
+  track it was handed. A guest window has no shim, so Meet asks Chrome itself.
+  The browser is launched with
+  `--auto-select-tab-capture-source-by-title=Call Bots shared screen`, the bot
+  opens a window of its own on the same scene page this app has always shared
+  (as a `data:` URL, so the terminal path needs no server), and Chrome picks
+  that tab silently — no picker on anyone's desktop. Two things about the DOM:
+  the button that stops it carries **no aria-label**, only the text
+  `cancel_presentationStop presenting` with the icon ligature glued on, so it
+  is clicked by name; and the toolbar's `You are presenting` is what states
+  the share is running. Measured on the wire: 1972×1052 at first, which Meet
+  then scales down while the scene barely changes — the same thing it does to
+  a person sharing a static screen.
 - **Send codecs do not work.** Meet negotiates its own list and picks AV1 from
   it whatever the preference says — a runtime switch to vp9 and a launch-time
   h264 both left AV1 on the wire.

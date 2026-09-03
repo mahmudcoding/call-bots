@@ -496,7 +496,7 @@ const post = async (url, body) => {
 const FULL_CAPABILITIES = Object.freeze({ mic: true, camera: true, screen: true, rtc: true, codecs: true })
 // What the server will say once a Meet session exists — mirrored here so the
 // controls Meet cannot honour never flash into view while a link is typed.
-const MEET_CAPABILITIES = Object.freeze({ mic: true, camera: true, screen: false, rtc: true, codecs: false })
+const MEET_CAPABILITIES = Object.freeze({ mic: true, camera: true, screen: true, rtc: true, codecs: false })
 const platformFromLink = () => {
   try {
     const url = new URL($('#link').value.trim())

@@ -46,13 +46,13 @@ const POLL_LOBBY = 2_000
 //   chrome://webrtc-internals (see guest-browser.mjs), which sees the peer
 //   connections Meet keeps in module closures out of any page script's reach.
 //
-// screen — DOES NOT WORK. getDisplayMedia hands Meet a live 1920x1080 track and
-//   Meet's own bundle then throws DisconnectedError and never starts
-//   presenting. Reproduced on two separate meetings, and identically with the
-//   codec shim disabled, so this is Meet refusing rather than anything of ours.
-//   screenState/setScreen below are correct against the DOM and stay tested
-//   against the mock pages; flipping this one boolean re-enables them if Meet
-//   ever accepts the share.
+// screen — WORKS, for a guest. It did not for the signed-in account bots that
+//   used to live here: those had our capture shim answering getDisplayMedia,
+//   and Meet's own bundle threw DisconnectedError on the track it was handed,
+//   on two separate meetings. A guest window has no shim — Meet asks Chrome
+//   itself, Chrome picks the bot's scene tab by title without a picker, and
+//   Meet presents it. Measured live: the presentation controls appear and a
+//   second outbound video goes on the wire beside the camera.
 //
 // codecs — DOES NOT WORK. Meet negotiates its own list and then picks AV1 from
 //   it whatever the preference says: a runtime switch to vp9 and a launch-time
@@ -64,7 +64,7 @@ const POLL_LOBBY = 2_000
 export const capabilities = Object.freeze({
   mic: true,
   camera: true,
-  screen: false,
+  screen: true,
   rtc: true,
   codecs: false,
 })
@@ -81,7 +81,12 @@ export const SEL = {
   mic: '[data-is-muted][aria-label*="microphone" i], button[aria-label*="microphone" i], [role="button"][aria-label*="microphone" i]',
   cam: '[data-is-muted][aria-label*="camera" i], button[aria-label*="camera" i], [role="button"][aria-label*="camera" i]',
   present: '[aria-label*="Present now" i], [aria-label*="Share screen" i]',
-  stopPresent: '[aria-label*="Stop presenting" i], [aria-label*="Stop sharing" i]',
+  // Measured live while a guest presented: the button that stops it carries no
+  // aria-label at all — its text reads "cancel_presentationStop presenting",
+  // the icon ligature glued to the words — so it is clicked by name below. The
+  // toolbar's "You are presenting" is what states the share is running.
+  stopPresent:
+    '[aria-label*="Stop presenting" i], [aria-label*="Stop sharing" i], [aria-label*="You are presenting" i]',
   tile: '[data-participant-id]',
 }
 
@@ -466,7 +471,7 @@ const setScreen = async (ctx, on) => {
   if (current === want) return want
 
   if (!on) {
-    await clickSelector(page, SEL.stopPresent)
+    if (!(await clickNamed(page, STOP_NAME))) await clickSelector(page, SEL.stopPresent)
   } else {
     await ctx.prepareScreen()
     if (!(await clickSelector(page, SEL.present))) {
@@ -486,6 +491,9 @@ const setScreen = async (ctx, on) => {
   log.warn(`screen share did not reach "${want}" in time`)
   return screenState(page)
 }
+
+// The stop control is named, not labelled — see SEL.stopPresent.
+const STOP_NAME = /^(?:cancel_presentation)?stop (?:presenting|sharing)$/iu
 
 const REFUSED_GUEST =
   'this meeting does not take guests — Meet refuses anonymous visitors for any ' +

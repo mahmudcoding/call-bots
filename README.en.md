@@ -95,11 +95,12 @@ microphone, participant checks, the RTC stream monitor and the dark-camera
 watchdog all work the same as on Aloqa — a Meet bot whose camera goes dark gets
 healed like any other.
 
-Two things stay off for Meet, each because Meet itself will not do them:
-**screen sharing** (Meet is handed a live 1920x1080 track and then refuses to
-start presenting) and **send codecs** (Meet negotiates its own list and picks
-AV1 from it whatever the preference says). The controls are hidden rather than
-left to fail, and the checks behind them are in `src/platforms/meet.mjs`. And
+One thing stays off for Meet, because Meet itself will not do it: **send
+codecs**, since Meet negotiates its own list and picks AV1 from it whatever the
+preference says. The control is hidden rather than left to fail, and the check
+behind it is in `src/platforms/meet.mjs`. Screen sharing does work — a bot
+shares the same scene an Aloqa bot does, picked up without a picker ever
+appearing on your desktop. And
 Meet turns guests away from meetings created by a personal Google account — the
 bot's card says so; Google Workspace meetings take guests when the admin allows.
 

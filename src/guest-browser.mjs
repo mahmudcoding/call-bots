@@ -45,7 +45,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
-import { RUN_MARKER, googleChromePath } from './browser.mjs'
+import { RUN_MARKER, SCREEN_TITLE, googleChromePath } from './browser.mjs'
 import { baseDir, projectRoot } from './config.mjs'
 import { plain as log } from './log.mjs'
 
@@ -446,6 +446,10 @@ const startProcess = async (media, options) => {
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream',
+      // If Meet ever asks Chrome to capture a screen, capture the bot's own
+      // scene tab and never put a picker on the user's desktop. Harmless when
+      // nothing shares: the flag only speaks when getDisplayMedia is called.
+      `--auto-select-tab-capture-source-by-title=${SCREEN_TITLE}`,
       // This process's own clip and voice: the flags are process-wide, and
       // the process is this guest's alone.
       ...(media && !options.noVideo ? [`--use-file-for-fake-video-capture=${media.video}`] : []),
@@ -598,6 +602,7 @@ export class GuestWindow {
     this.windowId = windowId
     this.label = label
     this.visible = true
+    this.sceneWindow = null
     // Names proved for tracks, kept until the track leaves the stats: a tile
     // that the grid unmounts for a moment must not turn its row back into
     // "Video · 1234" and back.
@@ -1027,6 +1032,32 @@ export class GuestWindow {
 
   waitForTimeout(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  // The picture this bot presents when it shares. Meet asks Chrome to capture
+  // something, and the browser was started with
+  // --auto-select-tab-capture-source-by-title, so it silently picks the tab
+  // whose title matches — this one — and never puts a picker on the user's
+  // desktop. The page carries its own moving clock, so the capture is a live
+  // picture rather than a still, and it is self-contained: a data: URL needs
+  // no server, which the terminal path does not have.
+  async prepareScene(html) {
+    if (this.closed) return null
+    if (this.sceneWindow) {
+      const still = await this.#speak(['url', this.sceneWindow]).catch(() => null)
+      if (still) return this.sceneWindow
+      this.sceneWindow = null
+    }
+    const id = Number(await this.#speak(['new-window']))
+    if (!Number.isFinite(id)) throw new Error('the Call Bots browser would not open a window for the share')
+    await this.#speak(['set-url', id, `data:text/html;charset=utf-8,${encodeURIComponent(html)}`])
+    // Tab capture sends the tab at the size it is drawn, so a default-sized
+    // window shares a small picture: measured 328x175 on the wire, where a
+    // person sharing a screen sends something like their display. Same page
+    // area as the guest's own window, for the same reason.
+    await this.#speak(['bounds', id, '0', '40', String(WINDOW_W), String(WINDOW_H)]).catch(() => {})
+    this.sceneWindow = id
+    return id
   }
 
   // What this window is showing, for a failure record. The same evidence a
