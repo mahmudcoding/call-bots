@@ -146,7 +146,7 @@ const invoke = (helper, args, { input = null, timeout = 10_000 } = {}) =>
 // macOS refuses the Apple Event outright when Automation permission has not
 // been granted — which must not be read as "the browser is not running". It is
 // a different problem with a different fix, and it has to be said out loud.
-const NOT_PERMITTED = /-1743|not authorized|not permitted/iu
+const NOT_PERMITTED = /-1743|-1744|not authorized|not permitted/iu
 const PERMISSION_HELP =
   'Call Bots needs permission to control the Call Bots browser — ' +
   'System Settings → Privacy & Security → Automation → Call Bots'

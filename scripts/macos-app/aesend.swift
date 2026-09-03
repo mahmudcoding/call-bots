@@ -28,6 +28,7 @@
 //   aesend <pid> quit
 
 import AppKit
+import CoreServices
 import Foundation
 
 func fourCC(_ s: String) -> OSType {
@@ -109,8 +110,23 @@ guard arguments.count >= 3, let pid = Int32(arguments[1]) else {
 }
 let target = NSAppleEventDescriptor(processIdentifier: pid)
 let timeoutSeconds: TimeInterval = Double(ProcessInfo.processInfo.environment["AESEND_TIMEOUT"] ?? "") ?? 10
+var automationPermissionChecked = false
+
+// Asking through the consent API is deliberate. A freshly installed Call Bots
+// has no Automation decision yet, and sending with `.neverInteract` alone
+// returns -1743 without ever giving the user a chance to allow the browser.
+// This helper is a short-lived subprocess, so the potentially blocking prompt
+// never stalls the app's main thread.
+func requireAutomationPermission() {
+  if automationPermissionChecked { return }
+  guard let address = target.aeDesc else { fail("could not address the Call Bots browser") }
+  let status = AEDeterminePermissionToAutomateTarget(address, typeWildCard, typeWildCard, true)
+  if status != noErr { fail("Apple Event error \(status) Automation permission was not granted") }
+  automationPermissionChecked = true
+}
 
 func send(_ eventClass: OSType, _ eventID: OSType, params: [(OSType, NSAppleEventDescriptor)]) -> NSAppleEventDescriptor {
+  requireAutomationPermission()
   let event = NSAppleEventDescriptor(
     eventClass: eventClass, eventID: eventID, targetDescriptor: target,
     returnID: Int16(kAutoGenerateReturnID), transactionID: Int32(kAnyTransactionID))

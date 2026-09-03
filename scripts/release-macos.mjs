@@ -214,6 +214,8 @@ try {
   }
   for (const [key, expected] of [
     ['CFBundleVersion', targetVersion],
+    ['NSAppleEventsUsageDescription',
+      'Controls private browser windows used to join Google Meet calls.'],
     ['SUFeedURL', UPDATE.feedUrl],
     ['SUPublicEDKey', UPDATE.publicEdKey],
   ]) {

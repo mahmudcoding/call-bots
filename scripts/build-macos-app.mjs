@@ -64,6 +64,8 @@ writeFileSync(
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Controls private browser windows used to join Google Meet calls.</string>
   <key>SUFeedURL</key><string>${UPDATE.feedUrl}</string>
   <key>SUPublicEDKey</key><string>${UPDATE.publicEdKey}</string>
   <key>SUEnableAutomaticChecks</key><true/>

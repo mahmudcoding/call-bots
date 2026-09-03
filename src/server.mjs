@@ -231,7 +231,11 @@ const startSession = async (body) => {
       if (stopped()) return
       if (roster.inCall().length === 0) {
         session.status = 'stopping'
-        session.lastError = 'no bot reached the call'
+        // The roster cards disappear during cleanup, so preserve their actual
+        // failure in the session toast. This is especially important on a new
+        // Mac where the user may need to allow Automation once.
+        session.lastError = roster.guests.find((guest) => guest.lastError)?.lastError ??
+          'no bot reached the call'
         await roster.teardownAll().catch(() => {})
         if (!owns()) return
         session.status = 'idle'

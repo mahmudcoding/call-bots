@@ -246,7 +246,7 @@ try {
     check('a retry during cleanup is refused', refusal !== null && refusal.ok === false,
       JSON.stringify(refusal))
     check('the failure is still reported',
-      (await getState()).lastError === 'no bot reached the call')
+      (await getState()).lastError === 'join refused: expired')
 
     const retry = await post('/api/start', { link: target.url, guests: 1 })
     check('a retry after cleanup is accepted', retry.ok === true, JSON.stringify(retry))

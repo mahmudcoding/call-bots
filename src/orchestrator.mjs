@@ -42,7 +42,7 @@ const pool = async (items, worker, concurrency) => {
       try {
         await worker(item)
       } catch (error) {
-        item.lastError = error.message
+        item.lastError ||= error.message
         failures.push({ item, error })
       }
     }
@@ -174,7 +174,10 @@ export class Roster {
 
     const failures = []
     const failed = (guest, error) => {
-      guest.lastError = error.message
+      // Guest.join records the short, user-facing cause before throwing a
+      // diagnostic error with URLs and evidence paths. Keep that useful cause
+      // for the dashboard instead of replacing it with internal detail.
+      guest.lastError ||= error.message
       failures.push({ item: guest, error })
     }
 
