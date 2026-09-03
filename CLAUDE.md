@@ -442,6 +442,10 @@ later` (a **menuitem**, not a button), and read the code out of
 
 ## Releasing
 
+Write `release-notes/<version>.md` first — that is what the update dialog
+shows a person, and a release that changes what the app does cannot say only
+"a new version is available". Without one the script falls back to that line.
+
 `npm run release:mac -- <version>` sets the version itself, **runs every test
 script**, builds, signs and publishes; the app updates through Sparkle from
 `SUFeedURL` (the repo's `releases/latest/download/appcast.xml`). Two things

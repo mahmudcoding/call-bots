@@ -227,11 +227,20 @@ try {
   mkdirSync(releaseDir, { recursive: true })
   const releaseArchive = join(releaseDir, archiveName)
   copyFileSync(archive, releaseArchive)
+  // What a person sees in the update dialog and on the release page. A
+  // release that changes what the app does — this one removed the Google
+  // account path — cannot say only "a new version is available", so notes
+  // written for the version win, and the generic line is the fallback for a
+  // release that genuinely has nothing to explain.
   const notes = join(releaseDir, `${basename(archiveName, '.zip')}.md`)
+  const written = join(projectRoot, 'release-notes', `${targetVersion}.md`)
   writeFileSync(
     notes,
-    `# Call Bots ${targetVersion}\n\nA new version of Call Bots is available.\n`,
+    existsSync(written)
+      ? readFileSync(written, 'utf8')
+      : `# Call Bots ${targetVersion}\n\nA new version of Call Bots is available.\n`,
   )
+  console.log(`  notes: ${existsSync(written) ? written : 'generic (none written for this version)'}`)
   const appcast = join(releaseDir, 'appcast.xml')
   run(sparkle.generateAppcast, [
     '--account', UPDATE.keychainAccount,
