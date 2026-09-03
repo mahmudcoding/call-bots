@@ -211,6 +211,15 @@ Clicking is plain `element.click()`.
   Measured at that size in a three-person call: 960×540 at ~900 kbps per
   remote stream, ~2.3 Mbps down per guest, three guests at a load average
   of 11 on the 8-core M3.
+- **A cascade that runs off the screen costs the test its point.** Guest
+  windows are 1920x1167 (a 1920x1080 page area plus Chrome's chrome), and
+  cascading each one 36 px down pushed the third past the bottom of a
+  1920x1243 display — Chrome clamps the window, the page area shrinks with
+  it, and Meet quietly sends that bot smaller video. The offset now wraps
+  inside `screen.availWidth/availHeight`, read once from one of the bots' own
+  pages (no permission, no guessing), and a screen too small for the full page
+  area logs it once rather than under-measuring in silence. Verified: three
+  guests all at 1920x1080 inner, all receiving 1280x720.
 - **Windows, N of them — hidden by default.** Hiding costs nothing:
   minimised for half a minute and hidden as an application for 150 s, both
   guests kept sending ~2.1 Mbps and receiving 1280×720 at 30 fps, thumbnails

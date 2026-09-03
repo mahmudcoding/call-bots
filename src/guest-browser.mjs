@@ -280,10 +280,46 @@ const WINDOW_W = 1920
 const WINDOW_H = 1080 + 87
 const CASCADE = 36
 let slots = 0
+// The screen the bots are on, asked of one of their own pages — no permission,
+// and no guessing. Cached: it cannot change often enough to matter and every
+// window placement would otherwise pay for it.
+let screenSize = null
+const screenOf = async (proc, windowId) => {
+  if (screenSize) return screenSize
+  const raw = await speak(proc, ['exec', windowId], {
+    input: 'screen.availWidth + " " + screen.availHeight',
+  }).catch(() => '')
+  const [w, h] = String(raw).trim().split(' ').map(Number)
+  screenSize = Number.isFinite(w) && Number.isFinite(h) && w > 400 && h > 300
+    ? { w, h }
+    : { w: WINDOW_W, h: WINDOW_H }
+  return screenSize
+}
+
+let warnedSmallScreen = false
+// A cascade that runs off the bottom of the screen is worse than no cascade:
+// Chrome clamps the window to what fits, the page area shrinks with it, and
+// Meet quietly asks for smaller video — the bot then measures less load than
+// a real user would cause, which is the whole thing these windows are sized
+// to avoid. So the offset wraps inside the screen, and a screen too small for
+// the full page area says so once rather than under-reporting in silence.
 const placeWindow = async (proc, windowId, slot) => {
-  const x = (slot % 12) * CASCADE
-  const y = 40 + (slot % 12) * CASCADE
-  await speak(proc, ['bounds', windowId, String(x), String(y), String(WINDOW_W), String(WINDOW_H)]).catch(() => {})
+  const screen = await screenOf(proc, windowId)
+  const width = Math.min(WINDOW_W, screen.w)
+  const height = Math.min(WINDOW_H, screen.h)
+  const room = { x: Math.max(0, screen.w - width), y: Math.max(0, screen.h - height - 40) }
+  const steps = Math.max(1, Math.floor(Math.min(room.x, room.y) / CASCADE) + 1)
+  const step = slot % steps
+  const x = step * CASCADE
+  const y = 40 + step * CASCADE
+  if (!warnedSmallScreen && (width < WINDOW_W || height < WINDOW_H)) {
+    warnedSmallScreen = true
+    log.warn(
+      `this screen fits ${width}x${height} of the ${WINDOW_W}x${WINDOW_H} a bot window wants — ` +
+        'Meet will send these bots smaller video than it sends a full-screen participant',
+    )
+  }
+  await speak(proc, ['bounds', windowId, String(x), String(y), String(width), String(height)]).catch(() => {})
 }
 
 // Stream stats for a guest come from chrome://webrtc-internals, kept open in a
