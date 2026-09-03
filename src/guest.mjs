@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 
 import { launchGuest } from './browser.mjs'
 import { guestColorHex } from './fixtures.mjs'
-import { failureShot, mkLogger } from './log.mjs'
+import { failureReport, failureShot, mkLogger } from './log.mjs'
 import { platformById } from './platforms/index.mjs'
 import { installMonitor, rtcSnapshot, rtcSummary } from './rtc.mjs'
 import { screenHtml, screenVideoPath } from './screen.mjs'
@@ -136,9 +136,14 @@ export class Guest {
     this.state = 'ready'
   }
 
+  // Evidence for a failure, in whatever form this bot's page can give it: a
+  // screenshot from a Playwright page, and from a Meet guest window — which
+  // has no debugger to photograph it — a written record of what Meet showed.
   async #shot(name) {
-    if (!this.instrumented) return null
-    return failureShot(this.page, this.options.runDir, this.user.slug, name)
+    if (this.instrumented) return failureShot(this.page, this.options.runDir, this.user.slug, name)
+    if (typeof this.page?.report !== 'function') return null
+    const body = await this.page.report().catch(() => null)
+    return body ? failureReport(this.options.runDir, this.user.slug, name, body) : null
   }
 
   #fail = async (name, message, { screenshot = true } = {}) => {
@@ -151,7 +156,8 @@ export class Guest {
     const where = await Promise.resolve(this.page?.url?.() ?? 'page closed').catch(
       () => 'page closed',
     )
-    throw new Error(`[${this.label}] ${message} (url: ${where}${shot ? `, screenshot: ${shot}` : ''})`)
+    const evidence = shot ? `, ${this.instrumented ? 'screenshot' : 'page report'}: ${shot}` : ''
+    throw new Error(`[${this.label}] ${message} (url: ${where}${evidence})`)
   }
 
   // The context the adapter works against.

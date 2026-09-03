@@ -127,7 +127,10 @@ xattr -cr "$BUNDLE"          # or codesign fails: "resource fork ... not allowed
 codesign --force --sign - "$BUNDLE"
 ```
 
-~300 MB, one time, cached. Then address it as
+A copy of whatever Google Chrome is installed — 1.4 GB in September 2026, not
+the ~300 MB an older Chrome took — built once, cached, and rebuilt only when
+Chrome's version changes. Measured on a first run: 24 s to build, and the bot
+was in the call 25 s after that. Then address it as
 `tell application id "com.aloqa.call-bots.browser"`.
 
 **2. Seed the profile before first launch**, or `execute javascript` refuses

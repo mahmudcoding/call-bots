@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,4 +27,23 @@ export const runsDir = join(dataDir, 'runs')
 
 export const ensureDirs = () => {
   for (const dir of [dataDir, fixturesDir, runsDir]) mkdirSync(dir, { recursive: true })
+  dropRemovedAccountProfiles()
+}
+
+// Google Meet bots used to be able to join as saved Google accounts, each in
+// its own signed-in Chrome profile under here. That way in was removed, and
+// with it every means of managing these — so an app that just updated would
+// carry a couple of hundred megabytes of live Google session cookies for a
+// feature that no longer exists, with nothing in the window to remove them.
+// They go on the first run after the update. Returns what it removed, so a
+// caller can say so.
+const REMOVED_PROFILES = join(baseDir, 'meet-profiles')
+export const dropRemovedAccountProfiles = () => {
+  if (!existsSync(REMOVED_PROFILES)) return false
+  try {
+    rmSync(REMOVED_PROFILES, { recursive: true, force: true })
+    return true
+  } catch {
+    return false
+  }
 }

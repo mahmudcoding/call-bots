@@ -58,9 +58,10 @@ only pairs it by position — and the dark-camera watchdog.
 What a guest needs, all on the Mac running Call Bots:
 
 - **Google Chrome installed.** Guests run in a private copy of it, built on the
-  first send (about a minute, one time), because Meet turns away anonymous
-  visitors from any browser it can tell is automated — the windows are driven
-  the way a person drives them.
+  first send — about half a minute, one time, and it takes as much disk as
+  Chrome itself (1.4 GB today) — because Meet turns away anonymous visitors
+  from any browser it can tell is automated, and the windows are driven the
+  way a person drives them.
 - **One macOS Automation prompt**, the first time: *Call Bots wants access to
   control the Call Bots browser.* Click Allow. It appears before any bot window
   opens, and it is the **only** permission Call Bots asks for. If you are ever

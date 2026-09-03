@@ -47,7 +47,7 @@ export const collectChecks = async () => {
   if (process.platform === 'darwin') {
     checks.push(
       googleChrome
-        ? ok('meet', 'Google Chrome found — Meet guests available')
+        ? ok('meet', `Google Chrome found — about ${machineProfile().meetMax} Meet guests at once`)
         : warn('meet', 'Google Chrome not found — Meet guests need it installed'),
     )
   } else {

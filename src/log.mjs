@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const COLORS = [36, 33, 35, 32, 34, 31, 96, 93, 95, 92]
@@ -43,6 +43,22 @@ export const mkLogger = (label, index = 0) => {
 }
 
 export const plain = mkLogger('calls-sim')
+
+// The same for a bot whose page cannot be photographed — a Meet guest is a
+// real Chrome window with no debugger attached, so there is no screenshot to
+// take. What Meet actually had on screen is written down instead, which is
+// what the screenshot was for: a person on another machine can see whether it
+// was a lobby, a refusal, a language, or a page that never rendered.
+export const failureReport = (runDir, label, name, body) => {
+  try {
+    mkdirSync(runDir, { recursive: true })
+    const file = join(runDir, `${label}-${name}-${Date.now()}.txt`)
+    writeFileSync(file, `${body}\n`)
+    return file
+  } catch {
+    return null
+  }
+}
 
 // Saves a screenshot for a failed wait so every failure is diagnosable:
 // selector + page URL + screenshot path all end up in the thrown message.

@@ -2,7 +2,7 @@
 import { parseArgs } from 'node:util'
 
 import { RUN_MARKER } from './browser.mjs'
-import { ensureDirs } from './config.mjs'
+import { dropRemovedAccountProfiles, ensureDirs } from './config.mjs'
 import { ensureGuestFixtures } from './fixtures.mjs'
 import { plain as log } from './log.mjs'
 import { Roster } from './orchestrator.mjs'
@@ -93,6 +93,9 @@ const main = async () => {
   if (values.help || !command || command === 'help') {
     console.log(USAGE)
     return
+  }
+  if (dropRemovedAccountProfiles()) {
+    log.info('removed the saved Google account profiles — Meet bots are guests now, and nothing used them')
   }
   ensureDirs()
 

@@ -496,10 +496,14 @@ export const startServer = async ({ port = 4610, open = true }) => {
           throw new Error('start a session first')
         }
         const count = Math.max(1, Math.min(50, Number(body.guests) || 1))
+        // A request that says nothing about the label keeps the session's —
+        // bots added to a call named "QA" should not arrive as "Bot 4". One
+        // that sends a label, even an empty one, means it: the dashboard's
+        // field is always sent, so clearing it still clears the name.
         const result = await session.roster.add(count, null, {
           startCam: body.camera !== false,
           startMic: body.mic !== false,
-          label: botLabel(body.label),
+          ...(body.label === undefined ? {} : { label: botLabel(body.label) }),
           audioCodec: codecName(body.audioCodec),
           videoCodec: codecName(body.videoCodec),
           screenCodec: codecName(body.screenCodec),

@@ -343,6 +343,17 @@ const TILE_NAMES = [
   'return JSON.stringify(out)})()',
 ].join('')
 
+// Everything a failure record needs off the page, in one evaluate.
+const PAGE_REPORT = [
+  '(function(){',
+  'var vis=function(e){var r=e.getBoundingClientRect();return r.width>0&&r.height>0};',
+  'var label=function(e){return(e.getAttribute("aria-label")||e.textContent||"").replace(/\\s+/g," ").trim().slice(0,60)};',
+  'var controls=[];[].slice.call(document.querySelectorAll("button,[role=button]")).forEach(function(b){if(controls.length>=14)return;if(!vis(b))return;var l=label(b);if(l&&controls.indexOf(l)<0)controls.push(l)});',
+  'var inputs=[];[].slice.call(document.querySelectorAll("input")).forEach(function(i){if(!vis(i))return;var l=i.getAttribute("aria-label")||i.placeholder||i.name||i.type;if(l)inputs.push(l)});',
+  'return JSON.stringify({url:location.href,title:document.title,readyState:document.readyState,visibility:document.visibilityState,',
+  '  controls:controls,inputs:inputs,text:((document.body&&document.body.innerText)||"").replace(/[\\r\\n]{2,}/g,"\\n").slice(0,1500)})})()',
+].join('')
+
 // One read of the whole page: which connection belongs to which page URL, and
 // the handful of fields the dashboard shows. Everything else on the page is
 // SDP and candidate grids the reader never touches.
@@ -368,6 +379,22 @@ const INTERNALS_READ = [
 
 // Every guest's process, so a run that dies can still take them down.
 const processes = new Set()
+// Profile directories not yet removed. A stopped process leaves the set of
+// live processes at once, but its profile may still be on disk for a few
+// seconds while Chrome finishes unlinking — and a caller that exits in that
+// window (`call-bots join` does, the moment teardown resolves) would strand
+// it. Tracked separately so the exit hook can take them, whichever way the
+// process goes.
+const pendingProfiles = new Set()
+const removeProfile = (dir) => {
+  try {
+    rmSync(dir, { recursive: true, force: true })
+    pendingProfiles.delete(dir)
+    return true
+  } catch {
+    return false
+  }
+}
 
 const startProcess = async (media, options) => {
   clearStaleProfiles()
@@ -430,6 +457,7 @@ const startProcess = async (media, options) => {
   )
   const proc = { child, userDataDir }
   processes.add(proc)
+  pendingProfiles.add(userDataDir)
   if (process.env.CALL_BOTS_DEBUG_MEET) console.error('[guest-browser] spawned pid', child.pid)
 
   // The first answer takes as long as a person needs: the very first Apple
@@ -473,16 +501,20 @@ const stop = async (proc) => {
   }
   // Chrome keeps unlinking its own files for several seconds after the kill,
   // and a removal that lands inside that window loses — measured as one
-  // profile left behind per run at 2.5 s of retries. Keep trying for a while,
-  // and let the next start clear whatever a crashed run left.
-  const sweep = (attempt = 0) => {
-    try {
-      rmSync(proc.userDataDir, { recursive: true, force: true })
-    } catch {
-      if (attempt < 20) setTimeout(() => sweep(attempt + 1), 1000).unref?.()
-    }
+  // profile left behind per run at 2.5 s of retries. The first few attempts
+  // are awaited, so a caller that shuts down straight afterwards leaves
+  // nothing behind: `call-bots join` exits on Ctrl-C the moment teardown
+  // resolves, and background timers die with the process. The rest run on
+  // unref'd timers, and the next start clears whatever a crashed run left.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (removeProfile(proc.userDataDir)) return
+    await new Promise((resolve) => setTimeout(resolve, 700))
   }
-  sweep()
+  const later = (attempt = 0) => {
+    if (removeProfile(proc.userDataDir) || attempt >= 16) return
+    setTimeout(() => later(attempt + 1), 1000).unref?.()
+  }
+  later()
 }
 
 const kill = (proc, signal) => {
@@ -527,15 +559,12 @@ const killOnExit = () => {
   if (exitHooked) return
   exitHooked = true
   const bail = () => {
-    for (const proc of processes) {
-      kill(proc, 'SIGTERM')
-      try {
-        rmSync(proc.userDataDir, { recursive: true, force: true })
-      } catch {
-        // The next start clears it.
-      }
-    }
+    for (const proc of processes) kill(proc, 'SIGTERM')
     processes.clear()
+    // Including the profiles of processes already stopped whose directory
+    // Chrome had not finished releasing. Synchronous on purpose: this runs
+    // inside process 'exit', where nothing asynchronous ever gets a turn.
+    for (const dir of [...pendingProfiles]) removeProfile(dir)
   }
   process.once('exit', bail)
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -998,6 +1027,26 @@ export class GuestWindow {
 
   waitForTimeout(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  // What this window is showing, for a failure record. The same evidence a
+  // screenshot would carry, in the form a window with no debugger can give:
+  // where it is, what Meet drew, and which of its controls exist.
+  async report() {
+    const raw = await this.evaluate(PAGE_REPORT).catch((error) => `{"error":${JSON.stringify(error.message)}}`)
+    const page = typeof raw === 'object' && raw !== null ? raw : { error: String(raw ?? 'no answer') }
+    const lines = [
+      `url:        ${page.url ?? '(unknown)'}`,
+      `title:      ${page.title ?? ''}`,
+      `readyState: ${page.readyState ?? ''}   visibility: ${page.visibility ?? ''}`,
+      `controls:   ${(page.controls ?? []).join(' · ') || '(none)'}`,
+      `inputs:     ${(page.inputs ?? []).join(' · ') || '(none)'}`,
+      '',
+      'what the page said:',
+      page.text ?? '(nothing rendered)',
+    ]
+    if (page.error) lines.unshift(`could not read the page: ${page.error}`, '')
+    return lines.join('\n')
   }
 
   // The dashboard's card thumbnail: the bot's own tile — in a call, its camera
