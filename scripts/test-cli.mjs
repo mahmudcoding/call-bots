@@ -24,48 +24,36 @@ const run = (args) => spawnSync(process.execPath, [cli, ...args], {
 try {
   console.log('\nCLI Meet support')
   const help = run(['help'])
-  check('help names both platforms and both ways into Meet',
+  check('help names both platforms and says Meet needs nothing set up',
     help.status === 0 && /Aloqa or Google Meet/u.test(help.stdout) &&
-      /--as <kind>/u.test(help.stdout) && /one ready account per\s*\n?concurrent bot/u.test(help.stdout),
+      /with nothing to set up/u.test(help.stdout) && !/--as /u.test(help.stdout),
     help.stdout.split('\n').slice(-5).join(' ').trim())
 
-  // Guests are the default, so a Meet join with nothing configured must get
-  // past the account check entirely and fail on the link instead.
+  // Meet bots are guests, so a join needs nothing configured and fails on the
+  // link rather than on an identity it was never going to need.
   const guest = run(['join', 'https://meet.google.com/abc-defg-hij', '--bots', '1'])
-  check('a Meet join needs no account by default',
-    !/Add or reconnect accounts in Call Bots/u.test(guest.stderr), guest.stderr.trim().slice(0, 120))
+  check('a Meet join asks for no account',
+    !/account/iu.test(guest.stderr), guest.stderr.trim().slice(0, 120))
 
-  const missing = run([
-    'join', 'https://meet.google.com/abc-defg-hij', '--bots', '1', '--as', 'account',
-  ])
-  check('asking for accounts with none configured is actionable',
-    missing.status === 1 && /Add or reconnect accounts in Call Bots/u.test(missing.stderr),
-    missing.stderr.trim())
-
-  const badMode = run(['join', 'https://meet.google.com/abc-defg-hij', '--as', 'nonsense'])
-  check('an unknown --as value says what it takes',
-    badMode.status === 1 && /--as takes guest or account/u.test(badMode.stderr),
-    badMode.stderr.trim())
-
-  // A guest names itself; only an account bot is stuck with Google's name.
+  // A guest names itself, so the label the account path could not honour works.
   const label = run([
-    'join', 'https://meet.google.com/abc-defg-hij', '--bots', '1',
-    '--as', 'account', '--label', 'QA',
+    'join', 'https://meet.google.com/abc-defg-hij', '--bots', '1', '--label', 'QA',
   ])
-  check('--label is refused only for account bots',
-    label.status === 1 && /--label is unavailable for Google Meet/u.test(label.stderr),
-    label.stderr.trim())
+  check('--label is accepted for Meet',
+    !/--label is unavailable/u.test(label.stderr), label.stderr.trim().slice(0, 120))
 
-  // These are refused from what the platform declares, not from a list of
-  // platform names in the CLI — live Meet ignores codec preferences and refuses
-  // to present, so its adapter says so and this follows.
+  // Refused from what the platform declares, not from a list of platform names
+  // in the CLI: live Meet ignores codec preferences, so its adapter says so and
+  // this follows. Presenting is NOT refused any more — a guest can share.
   const mediaOptions = run([
-    'join', 'https://meet.google.com/abc-defg-hij', '--as', 'account', '--share', '1',
+    'join', 'https://meet.google.com/abc-defg-hij',
     '--audio-codec', 'opus', '--video-codec', 'vp9', '--screen-codec', 'vp8',
   ])
-  check('screen-share and codec flags all report unavailable for Meet',
-    mediaOptions.status === 1 && ['--share', '--audio-codec', '--video-codec', '--screen-codec']
+  check('codec flags report unavailable for Meet',
+    mediaOptions.status === 1 && ['--audio-codec', '--video-codec', '--screen-codec']
       .every((flag) => mediaOptions.stderr.includes(flag)), mediaOptions.stderr.trim())
+  check('and --share is not among them',
+    !/--share/u.test(mediaOptions.stderr), mediaOptions.stderr.trim())
 } finally {
   rmSync(scratch, { recursive: true, force: true })
 }

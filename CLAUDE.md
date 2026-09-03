@@ -415,6 +415,17 @@ Google account, click `New meeting` (a button), then `Create a meeting for
 later` (a **menuitem**, not a button), and read the code out of
 `document.body.innerText`.
 
+## Releasing
+
+`npm run release:mac -- <version>` sets the version itself, **runs every test
+script**, builds, signs and publishes; the app updates through Sparkle from
+`SUFeedURL` (the repo's `releases/latest/download/appcast.xml`). Two things
+follow from that: the test scripts must match the code or the release stops
+before it builds, and a version has to be given on the command line — nothing
+infers one. The last published tag is v0.5.4; 0.6.0 in package.json was never
+released, so the Meet work here is unreleased, and removing the Google account
+path is a breaking change worth its own minor version.
+
 ## Tests
 
 No framework. Each script collects `check(name, pass, detail)` and exits 1 on

@@ -97,7 +97,7 @@ const meetRoster = (guestState = 'in-call', waitingAdmission = false) => ({
   meetingId: 'abc-defg-hij',
   inviteLink: 'https://meet.google.com/abc-defg-hij?hl=en',
   platform: 'Google Meet',
-  capabilities: { mic: true, camera: true, screen: false, rtc: true, codecs: false },
+  capabilities: { mic: true, camera: true, screen: true, rtc: true, codecs: false },
   batches: [{ id: 1, at: 1_755_000_000_000, size: 1 }],
   guests: [{
     index: 0,
@@ -318,17 +318,17 @@ try {
       await page.locator('.card [data-act=leave]').isVisible() && await stopBtn.isVisible())
   // The monitor is the point of the parity work — it is what the camera
   // watchdog reads. Presenting is the one thing live Meet refuses.
-  check('Meet cards carry the stream monitor and hide only screen sharing',
+  check('Meet cards carry the stream monitor and the share control',
     await page.locator('.card [data-rtc-toggle]').isVisible() &&
-      !(await page.locator('.card [data-act=share]').isVisible()))
+      await page.locator('.card [data-act=share]').isVisible())
   check('the dashboard notifies the user about lobby admission',
     (await page.locator('.toast.-warn').allTextContents()).some((text) => text.includes('awaiting admission')))
   await push(state('running', meetRoster()))
-  check('Meet keeps the fleet mic and camera controls, without share or codecs',
+  check('Meet keeps the fleet mic, camera and share controls, without codecs',
     await page.locator('#allbar').isVisible() &&
       await page.locator('#allbar [data-all=mute]').isVisible() &&
       await page.locator('#allbar [data-all=cam-off]').isVisible() &&
-      !(await page.locator('#allbar [data-capability=screen]').isVisible()) &&
+      await page.locator('#allbar [data-capability=screen]').isVisible() &&
       !(await page.locator('#allbar [data-capability=codecs]').isVisible()))
   check('another guest batch can be added to a running Meet session', !(await goBtn.isDisabled()))
   check('the Meet line offers to show the hidden bot windows while bots are in',

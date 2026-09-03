@@ -244,11 +244,11 @@ check('rejects a non-standard Meet path with an example',
 // connection there, and neither presenting nor codec preferences do anything.
 check('declares the controls live Meet actually honours',
   meet.capabilities.mic && meet.capabilities.camera && meet.capabilities.rtc &&
-    !meet.capabilities.screen && !meet.capabilities.codecs,
+    meet.capabilities.screen && !meet.capabilities.codecs,
   JSON.stringify(meet.capabilities))
-// Disabled by capability, not deleted — the implementation stays correct
-// against the DOM so re-enabling it is one boolean if Meet ever accepts a share.
-check('still implements presenting behind that switch',
+// Presenting works for a guest, measured live: Meet asks Chrome itself, and
+// Chrome picks the bot's own scene tab by title without any picker.
+check('implements presenting',
   typeof meet.screenState === 'function' && typeof meet.setScreen === 'function')
 const aliasTarget = resolveLink('https://meet.google.com/lookup/AbCd1234?pli=1')
 check('recognises a nicknamed Meet link',
