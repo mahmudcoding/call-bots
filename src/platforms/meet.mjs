@@ -383,8 +383,11 @@ const setDevice = async ({ page, log }, kind, which, on) => {
   const selector = which === 'mic' ? SEL.mic : SEL.cam
   let current = await deviceState(page, which)
   // Meet draws the toolbar a beat after the leave control that marks the call
-  // as joined; a toggle asked for in that beat is not missing, just late.
+  // as joined; a toggle asked for in that beat is not missing, just late. A
+  // page that has closed will never draw it, and waiting five seconds per
+  // device on a bot that is already gone only delays a teardown.
   for (let waited = 0; current === 'unknown' && waited < 5_000; waited += 250) {
+    if (page.isClosed?.()) return 'unknown'
     await page.waitForTimeout(250)
     current = await deviceState(page, which)
   }
@@ -513,6 +516,18 @@ const join = async (ctx) => {
   let reloaded = false
 
   for (;;) {
+    // A bot closed while it was still joining — a Stop mid-batch, a card
+    // removed — must end here rather than poll a window that is gone. Every
+    // read of a closed page fails, and every failure was treated as "try
+    // again next tick", so the loop ran on to its deadline: ten minutes for a
+    // bot in the lobby, with the roster's teardown waiting on this promise the
+    // whole time. Stop sat at "stopping" until it gave up, measured at over
+    // two minutes with nothing left to do.
+    if (page.isClosed?.()) {
+      setWaitingAdmission?.(false)
+      throw new Error(`[${displayName}] closed while it was joining`)
+    }
+
     // A page that has drawn nothing by the halfway mark gets one more load:
     // a request Meet dropped on the way in, or a window still on its new-tab
     // page, otherwise costs the full minute and ends in a message that blames

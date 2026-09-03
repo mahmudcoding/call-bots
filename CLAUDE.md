@@ -351,6 +351,19 @@ Each is still true; none is worth an evening again.
   window's id from the creation (`set _w to make new window` / `id of _w`):
   diffing the window list before and after fails silently under load, when a
   listing that errored read as an empty list.
+- **A closed page must end a join, not be polled.** Every read of a closed
+  window fails, and the join loop treated each failure as "try again next
+  tick" — so a bot closed mid-join (a Stop during a batch, a card removed)
+  ran on to its deadline, ten minutes for one in the lobby, with the roster's
+  teardown awaiting that promise the whole time. Stop sat at "stopping"
+  indefinitely and the window could not start another session; only quitting
+  the app cleared it. `page.isClosed()` is checked at the top of the loop and
+  inside the device waits, and `#fail` reports "closed while it was joining"
+  rather than the step's own message, which used to blame Meet for it.
+- **`pkill -x "Call Bots"` matches nothing** — the binary inside the bundle is
+  `CallBots`, no space. Use `pkill -f "MacOS/CallBots"`, or `POST /api/quit`,
+  which is what the app's own menu does and which rescued a wedged instance in
+  five seconds.
 - **osascript stuck inside an Apple Event ignores SIGTERM.** Thirty of them
   were alive at once under load, each holding a queue slot for 25 s.
   `killSignal: 'SIGKILL'`, a 10 s timeout, and a queue that sends three at a

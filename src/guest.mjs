@@ -147,7 +147,13 @@ export class Guest {
   }
 
   #fail = async (name, message, { screenshot = true } = {}) => {
-    const shot = screenshot ? await this.#shot(name) : null
+    // A bot closed mid-step fails at whatever it was doing, and the step's own
+    // message blames the call platform for it: "the name field would not take
+    // a name" is what a Stop during the name screen used to report. Say what
+    // happened instead, and take no evidence from a page that is gone.
+    const closed = Boolean(this.page?.isClosed?.())
+    const shot = screenshot && !closed ? await this.#shot(name) : null
+    if (closed) message = 'closed while it was joining'
     this.state = `error:${name}`
     this.lastError = message
     // A failure can race a teardown that has already dropped the page, and an
