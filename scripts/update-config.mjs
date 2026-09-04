@@ -1,8 +1,8 @@
 export const UPDATE = Object.freeze({
   bundleId: 'com.aloqa.call-bots',
   feedUrl:
-    'https://github.com/mahmudcoding/call-bots/releases/latest/download/appcast.xml',
-  githubRepo: 'mahmudcoding/call-bots',
+    'https://github.com/tbm-org/call-bots/releases/latest/download/appcast.xml',
+  githubRepo: 'tbm-org/call-bots',
   keychainAccount: 'com.aloqa.call-bots',
   publicEdKey: 'JbqCiFtuDZTnMqUmn+opKe0otL1pUARNMrIKmUELCFk=',
   scheduledCheckInterval: 86_400,
